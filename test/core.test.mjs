@@ -66,6 +66,36 @@ test('folder numbers reserve atomically above gaps and local reservations', () =
   } finally { cleanup(); }
 });
 
+test('bulk clearing removes only selected terminal records and preserves numbering', () => {
+  const { store, cleanup } = storeForTest();
+  try {
+    store.saveBinding({ owner: 'example-owner', repo: 'example-research-repo', fullName: 'example-owner/example-research-repo', githubId: '9876', branch: 'main', sourceName: source.name });
+    const items = store.reserve(['Finished PR', 'Finished without PR', 'Reservation', 'Failed', 'Blocked', 'Rejected PR', 'Stopped', 'Running', 'Queued']);
+    const statuses = ['pr_validated', 'completed_no_pr', 'reserved', 'failed', 'blocked', 'pr_rejected', 'stopped', 'running', 'queued'];
+    const update = store.db.prepare('UPDATE projects SET status=? WHERE id=?');
+    items.forEach((item, index) => update.run(statuses[index], item.id));
+    store.log('test', 'Finished activity', items[0].id);
+    store.db.prepare('INSERT INTO jules_activities(name,project_id,kind,originator,summary,detail,created_at) VALUES (?,?,?,?,?,?,?)').run('sessions/test/activities/one', items[0].id, 'message', 'agent', 'Done', '', new Date().toISOString());
+    store.db.prepare('INSERT INTO jules_auto_replies(activity_name,project_id,status,created_at,updated_at) VALUES (?,?,?,?,?)').run('sessions/test/activities/one', items[0].id, 'sent', new Date().toISOString(), new Date().toISOString());
+    const next = store.nextProjectNumber();
+    assert.equal(store.clearProjects('finished'), 2);
+    assert.equal(store.clearProjects('reserved'), 1);
+    assert.equal(store.clearProjects('failed'), 3);
+    assert.equal(store.clearProjects('stopped'), 1);
+    assert.deepEqual(store.projects().map(item => item.status).sort(), ['queued', 'running']);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM jules_activities').get().n, 0);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM jules_auto_replies').get().n, 0);
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE project_id=?").get(items[0].id).n, 0);
+    assert.equal(store.nextProjectNumber(), next);
+    assert.throws(() => store.clearProjects('running'), /valid project category/);
+    for (const remaining of store.projects()) update.run('stopped', remaining.id);
+    assert.equal(store.clearProjects('stopped'), 2);
+    assert.equal(store.projects().length, 0);
+    assert.equal(store.nextProjectNumber(), next);
+    assert.equal(store.reserve(['New topic'])[0].folder_number, next);
+  } finally { cleanup(); }
+});
+
 test('PR validation rejects wrong base and files outside the assigned folder', async () => {
   const binding = { github_owner: 'example-owner', github_repo: 'example-research-repo', github_repository_id: '9876', base_branch: 'main' };
   const project = { folder: '9-Uncertainty-Estimation' };
@@ -74,4 +104,6 @@ test('PR validation rejects wrong base and files outside the assigned folder', a
   await assert.rejects(() => validatePullRequest('https://github.com/example-owner/other/pull/12', project, binding, good), /different repository/);
   await assert.rejects(() => validatePullRequest('https://github.com/example-owner/example-research-repo/pull/12', project, binding, { ...good, pullFiles: async () => [{ filename: 'README.md' }] }), /outside/);
   await assert.rejects(() => validatePullRequest('https://github.com/example-owner/example-research-repo/pull/12', project, binding, { ...good, pull: async () => ({ base: { repo: { id: 9876 }, ref: 'develop' } }) }), /base branch/);
+  await assert.rejects(() => validatePullRequest('https://github.com/example-owner/example-research-repo/pull/12', project, binding, { ...good, pull: async () => ({ base: { repo: { id: 9876 }, ref: 'main' }, changed_files: 2 }) }), /incomplete/);
+  await assert.rejects(() => validatePullRequest('https://github.com/example-owner/example-research-repo/pull/12', project, binding, { ...good, pullFiles: async () => Array(3000).fill({ filename: '9-Uncertainty-Estimation/README.md' }) }), /incomplete/);
 });

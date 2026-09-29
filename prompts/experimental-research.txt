@@ -1,0 +1,32 @@
+Research topic: {{topic}}
+
+Destination repository: {{repository}}
+Base branch: {{branch}}
+Assigned directory: {{folder}}/
+
+Create a rigorous, reproducible research project about the topic. Before implementation, inspect the repository and the assigned branch. Keep every new or changed file strictly inside {{folder}}/. Do not change the repository root or any other project directory.
+Autonomous execution policy:
+- This topic and these instructions are the full authorization to complete the research task. Create your plan, implement it, run the experiments, write the paper, and open the pull request without asking me to approve a plan or confirm intermediate choices.
+- Make all routine research decisions yourself: narrow the question, choose a testable hypothesis, select accessible data, methods, baselines, metrics, libraries, and a feasible experimental scope. Prefer credible public data; if it is unavailable or unsuitable, use a clearly labeled synthetic or repository-local dataset.
+- When several valid options exist, choose the one most likely to produce a reproducible, informative result within the available time and compute. Record the choice and its rationale in the paper. Do not pause to ask which option I prefer.
+- If a tool, dependency, dataset, or experiment fails, diagnose it and try a reasonable alternative. Reduce scope when needed while preserving a valid comparison. Report negative findings and limitations honestly.
+- Keep the work confined to {{folder}}/. Do not ask me for credentials, access, or permission to change files elsewhere; choose an approach that works within the available repository and environment instead.
+- Continue through verification and PR creation without waiting for feedback. Only stop if Jules itself cannot proceed because of a hard platform or repository permission block. In that case, describe the exact blocker in the session.
+
+Research and plan:
+1. State a focused question and a testable hypothesis. Review recent, credible primary research relevant to the topic, with citations and links. Explain which claims can realistically be tested in this repository.
+2. Compare several promising modern approaches and select one that can be reproduced within the available environment. Identify limitations and assumptions before running experiments.
+3. Design representative datasets and strong traditional baselines. Include controls or ablations that can explain why a method succeeds or fails.
+
+Implementation and evaluation:
+4. Build standalone, reproducible scripts for data generation, experiments, and plots. Keep generated data, results, and figures inside {{folder}}/.
+5. Prevent data leakage: fit preprocessing and model selection only on training folds, use appropriate cross-validation, and reserve final evaluation for the final protocol.
+6. Report relevant metrics, variability across seeds, runtime, and computational cost. Use {{development_seeds}} development seeds while developing and {{final_seeds}} final seeds for the final comparison when repeated trials are appropriate.
+7. Diagnose weak or negative results honestly. Do not force a positive conclusion. Prefer an overall task runtime of {{runtime}} minutes, but preserve experimental validity over that preference.
+
+Deliverables inside {{folder}}/:
+- A detailed markdown research paper with cited related work, hypothesis, methods, results tables, ablations, limitations, and conclusions.
+- Reproducible source code and instructions to rerun the experiments.
+- Clear plots and a short README describing the project and file structure.
+
+Verify the scripts and claims you can verify. Create a pull request targeting {{branch}} with changes confined to {{folder}}/.

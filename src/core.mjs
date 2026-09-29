@@ -130,6 +130,10 @@ export async function validatePullRequest(url, project, binding, github) {
     throw new BindingError('The pull request targets a different repository or base branch.');
   }
   const files = await github.pullFiles(binding.github_owner, binding.github_repo, number);
+  // GitHub caps this endpoint at 3,000 files. Never certify a partial file list.
+  if (files.length >= 3000 || Number.isSafeInteger(pull.changed_files) && pull.changed_files !== files.length) {
+    throw new BindingError('GitHub returned an incomplete pull request file list. Review the pull request manually.');
+  }
   if (!files.length || files.some(file => !file.filename?.startsWith(`${project.folder}/`) || file.previous_filename && !file.previous_filename.startsWith(`${project.folder}/`))) {
     throw new BindingError(`Pull request changes files outside ${project.folder}/.`);
   }

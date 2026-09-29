@@ -128,6 +128,7 @@ h2 { margin-bottom: 18px; font-size: 1.33rem; font-weight: 700; letter-spacing: 
 .metrics > div:last-child { border-right: 0; }
 .metrics span { color: var(--quiet); font-size: .77rem; }
 .metrics strong { font-size: 1.95rem; font-weight: 700; letter-spacing: -.065em; line-height: 1; }
+.metric-link { align-self: flex-start; color: #c8df9b; font-size: .78rem; }
 .workspace-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 20px; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 25px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { margin: 0; }
@@ -136,6 +137,12 @@ h2 { margin-bottom: 18px; font-size: 1.33rem; font-weight: 700; letter-spacing: 
 .folder-list span { display: block; padding: 11px 0; border-bottom: 1px solid var(--line); color: #d3d4d1; font: .81rem ui-monospace, Consolas, monospace; }
 .folder-list p { color: var(--quiet); }
 .projects { margin-top: 20px; }
+.project-clear { margin: -5px 0 23px; padding: 0 0 22px; border-bottom: 1px solid var(--line); }
+.project-clear p { margin-bottom: 13px; color: var(--quiet); font-size: .8rem; line-height: 1.5; }
+.project-clear-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.project-clear-actions form { margin: 0; }
+.project-clear-actions button { min-height: 36px; padding: 7px 11px; font-size: .76rem; }
+.project-clear-actions button:disabled { opacity: .45; cursor: default; }
 .table-wrap { overflow: auto; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th { padding: 12px; border-bottom: 1px solid var(--line-strong); color: var(--quiet); font-size: .68rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
@@ -156,6 +163,19 @@ td small { display: block; margin-top: 5px; color: var(--quiet); font-size: .79r
 .assigned li span { color: var(--quiet); font-size: .82rem; }
 .settings-actions { margin-bottom: 29px; }
 .prompt-editor { display: block; width: 100%; min-height: 600px !important; padding: 19px; border: 1px solid #393c42; border-radius: 7px; background: var(--field); color: var(--text); font: .84rem/1.6 ui-monospace, Consolas, monospace; resize: vertical; }
+.prompt-library { margin-bottom: 18px; }
+.prompt-library > .help { margin: -7px 0 19px; }
+.prompt-preset-list { display: grid; gap: 9px; }
+.prompt-preset { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 65px; padding: 12px 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
+.prompt-preset > div { display: flex; align-items: center; flex-wrap: wrap; gap: 11px; }
+.prompt-preset strong { font-size: .86rem; }
+.prompt-preset-note { color: var(--quiet); font-size: .78rem; }
+.prompt-preset form { margin: 0; }
+.prompt-preset button { min-height: 35px; padding: 7px 11px; }
+.prompt-save-as { margin-top: 27px; padding-top: 24px; border-top: 1px solid var(--line); }
+.prompt-save-row { display: flex; gap: 11px; }
+.prompt-save-row input { flex: 1; min-width: 0; min-height: 44px; padding: 10px 13px; border: 1px solid #393c42; border-radius: 7px; background: var(--field); color: var(--text); }
+.prompt-save-row input:focus { border-color: #b9ce75; outline: 1px solid #b9ce75; }
 
 .agent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .agent-card { min-width: 0; padding: 26px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
@@ -181,6 +201,11 @@ td small { display: block; margin-top: 5px; color: var(--quiet); font-size: .79r
 .prompt-snapshot { margin-top: 18px; }
 .prompt-snapshot summary { cursor: pointer; font-weight: 700; }
 .saved-setup { margin-top: 18px; color: var(--muted); }
+.project-number-settings { margin-top: 18px; }
+.project-number-settings > p { color: var(--muted); font-size: .87rem; line-height: 1.55; }
+.project-number-row { display: flex; align-items: center; gap: 12px; }
+.project-number-row input { width: 150px; min-height: 44px; padding: 10px 13px; border: 1px solid #393c42; border-radius: 7px; background: var(--field); color: var(--text); }
+.project-number-row input:focus { border-color: #b9ce75; outline: 1px solid #b9ce75; }
 .saved-setup code { color: #e2e3de; }
 
 @media (max-width: 900px) {
@@ -213,4 +238,7 @@ td small { display: block; margin-top: 5px; color: var(--quiet); font-size: .79r
   .step span { width: 25px; height: 25px; flex: 0 0 auto; }
   .shell footer { flex-direction: column; gap: 7px; }
   .repo-summary { width: 100%; min-width: 0; }
+  .prompt-preset, .prompt-save-row { align-items: stretch; flex-direction: column; }
+  .project-number-row { align-items: stretch; flex-direction: column; }
+  .project-number-row input { width: 100%; }
 }

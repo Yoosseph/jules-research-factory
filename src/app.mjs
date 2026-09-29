@@ -6,11 +6,11 @@ import { discoverSources, verifyRepository, verifyBinding, verifyReservations, v
 import { julesClient, githubClient } from './providers.mjs';
 import { setupPage, dashboardPage, preflightPage, settingsPage, guidePage, layout, styleHash } from './ui.mjs';
 import { promptPage, activityPage, agentSettingsPage, projectPage } from './work-ui.mjs';
-import { defaultPromptPath, readPromptTemplate, savePromptTemplate } from './prompt.mjs';
+import { defaultPromptPath, readPromptTemplate, initializePromptLibrary, syncActivePrompt, promptLibrary, saveActivePrompt, savePromptAsNew, activatePrompt } from './prompt.mjs';
 import { saveActivities } from './activities.mjs';
 
 const defaults = store => ({ runtime: store.get('runtime') ?? '30–60', developmentSeeds: Number(store.get('developmentSeeds') ?? 5), finalSeeds: Number(store.get('finalSeeds') ?? 10), concurrency: Number(store.get('concurrency') ?? 10), autoReply: store.get('autoReply') !== '0' });
-const autonomousReply = 'Please continue without waiting for me. Answer your question by making the reasonable choice that best satisfies the original research prompt, stays inside the assigned project folder, and produces a reproducible result. If a dataset, tool, or approach is unavailable, choose a viable accessible alternative. Document the decision and assumptions in the paper, finish the implementation and evaluation, and create the requested pull request.';
+const autonomousReply = 'Please continue without waiting for me. Make the reasonable choice that best satisfies the original research prompt and stays inside the assigned project folder. If a source, tool, or approach is unavailable, choose a viable alternative. Document the decision and its limits in the report, complete the requested deliverables, and create the pull request.';
 const csrfToken = randomBytes(32).toString('hex');
 const safeEqual = (a, b) => { const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? ''); return x.length === y.length && timingSafeEqual(x, y); };
 const html = (response, body, status = 200) => { response.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': `default-src 'self'; style-src 'sha256-${styleHash}'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` }); response.end(body); };
@@ -38,12 +38,14 @@ function saveDefaults(store, values) {
 }
 
 async function bodyParams(request) {
-  let raw = '';
+  const chunks = [];
+  let size = 0;
   for await (const chunk of request) {
-    raw += chunk;
-    if (raw.length > 65536) throw new Error('Form is too large.');
+    size += chunk.length;
+    if (size > 65536) throw new Error('Form is too large.');
+    chunks.push(chunk);
   }
-  return new URLSearchParams(raw);
+  return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
 }
 
 function idsFrom(value) {
@@ -54,6 +56,7 @@ function idsFrom(value) {
 }
 
 export function createApp(store, { julesFactory = julesClient, githubFactory = githubClient, promptPath = defaultPromptPath } = {}) {
+  initializePromptLibrary(store, promptPath);
   let schedulerBusy = false;
   let schedulerRerunRequested = false;
   let pollingBusy = false;
@@ -75,7 +78,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       catch (cause) { error ||= cause.message; }
     }
     const prefill = { owner: process.env.DEFAULT_GITHUB_OWNER, repo: process.env.DEFAULT_GITHUB_REPO, branch: process.env.DEFAULT_BASE_BRANCH || 'main', ...options.prefill };
-    html(response, setupPage({ stepNumber, sources, binding, folders: store.remoteFolders(), defaults: defaults(store), error, branches: options.branches ?? [], csrfToken, prefill, rebind: !!forcedRebind, connectedJules: !!julesKey() && !error }), error ? 422 : 200);
+    html(response, setupPage({ stepNumber, sources, binding, folders: store.remoteFolders(), defaults: defaults(store), error, branches: options.branches ?? [], csrfToken, prefill, rebind: !!forcedRebind, connectedJules: !!julesKey() && !error, nextProjectNumber: store.nextProjectNumber() }), error ? 422 : 200);
   }
 
   async function refresh() {
@@ -199,6 +202,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     if (pollingBusy) return;
     pollingBusy = true;
     try {
+      const validated = store.db.prepare("SELECT * FROM projects WHERE status='pr_validated'").all();
       const running = store.db.prepare("SELECT * FROM projects WHERE status='running'").all();
       for (const project of running) {
         try {
@@ -247,18 +251,19 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
           store.log('activity_poll_error', error.message, project.id);
         }
       }
-      for (const project of store.db.prepare("SELECT * FROM projects WHERE status='pr_validated'").all()) {
+      for (const project of validated) {
         try {
           const binding = store.binding();
           if (project.binding_identity !== `${binding.github_repository_id}|${binding.jules_source_id}|${binding.base_branch}`) continue;
           verifyProjectBinding([project], binding);
-          const number = Number(new URL(project.pr_url).pathname.match(/\/pull\/(\d+)\/?$/)?.[1]);
-          if (!number) continue;
-          const pull = await githubFactory(githubToken()).pull(binding.github_owner, binding.github_repo, number);
-          if (String(pull.base?.repo?.id) !== String(binding.github_repository_id) || pull.base?.ref !== binding.base_branch) throw new BindingError('PR destination changed after validation.');
-          const status = pull.merged_at ? 'merged' : pull.state === 'closed' ? 'closed' : 'open';
-          store.db.prepare('UPDATE projects SET pr_status=?,updated_at=? WHERE id=?').run(status, dateNow(), project.id);
-        } catch (error) { store.log('pr_status_error', error.message, project.id); }
+          const checked = await validatePullRequest(project.pr_url, project, binding, githubFactory(githubToken()));
+          store.db.prepare('UPDATE projects SET pr_status=?,updated_at=? WHERE id=?').run(checked.status, dateNow(), project.id);
+        } catch (error) {
+          if (error instanceof BindingError) {
+            store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run('pr_rejected', error.message, dateNow(), project.id);
+            store.log('pr_rejected', error.message, project.id);
+          } else store.log('pr_status_error', error.message, project.id);
+        }
       }
     } finally { pollingBusy = false; void schedule(); }
   }
@@ -284,15 +289,15 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       if (request.method === 'GET') {
         if (path === '/') {
           if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
-          return html(response, dashboardPage({ binding: store.binding(), folders: store.remoteFolders(), projects: store.projects(), csrfToken, defaults: defaults(store), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
+          return html(response, dashboardPage({ binding: store.binding(), folders: store.remoteFolders(), projects: store.projects(), csrfToken, defaults: defaults(store), nextProjectNumber: store.nextProjectNumber(), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
         }
         if (path === '/setup') return setupView(response, { rebind: url.searchParams.has('rebind'), defaults: url.searchParams.has('defaults'), error: url.searchParams.get('error') });
         if (path === '/setup/guide') return html(response, guidePage(csrfToken));
         if (path === '/settings') {
           if (!store.binding()) return redirect(response, '/setup');
-          return html(response, settingsPage({ binding: store.binding(), folders: store.remoteFolders(), projects: store.projects(), csrfToken, defaults: defaults(store), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
+          return html(response, settingsPage({ binding: store.binding(), folders: store.remoteFolders(), projects: store.projects(), csrfToken, defaults: defaults(store), nextProjectNumber: store.nextProjectNumber(), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
         }
-        if (path === '/prompt') return html(response, promptPage({ template: readPromptTemplate(promptPath), csrfToken, configured: store.get('configured') === '1', back: store.get('configured') === '1' ? '/settings' : '/setup?defaults=1', message: url.searchParams.get('message') }));
+        if (path === '/prompt') return html(response, promptPage({ template: syncActivePrompt(store, promptPath), library: promptLibrary(store), csrfToken, configured: store.get('configured') === '1', back: store.get('configured') === '1' ? '/settings' : '/setup?defaults=1', message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
         if (path === '/activity') {
           if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
           const projects = store.projects();
@@ -330,12 +335,22 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       if (!safeEqual(form.get('csrf'), csrfToken)) { response.writeHead(403); response.end('Invalid form token'); return; }
       if (path === '/prompt') {
         try {
-          savePromptTemplate(form.get('promptTemplate'), promptPath);
-          store.log('prompt_updated', 'Research prompt template updated');
+          if (form.get('action') === 'save-as') {
+            const preset = savePromptAsNew(store, form.get('promptName'), form.get('promptTemplate'), promptPath);
+            store.log('prompt_created', `Saved and selected prompt ${preset.name}`);
+            return redirect(response, messageUrl('/prompt', `Saved and selected “${preset.name}”. New launches will use it.`));
+          }
+          saveActivePrompt(store, form.get('promptTemplate'), promptPath);
+          store.log('prompt_updated', 'Active prompt template updated');
           return redirect(response, messageUrl('/prompt', 'Prompt saved. New launches will use this version.'));
         } catch (error) {
-          return html(response, promptPage({ template: form.get('promptTemplate') ?? '', csrfToken, configured: store.get('configured') === '1', back: store.get('configured') === '1' ? '/settings' : '/setup?defaults=1', error: error.message }), 422);
+          return html(response, promptPage({ template: form.get('promptTemplate') ?? '', promptName: form.get('promptName') ?? '', library: promptLibrary(store), csrfToken, configured: store.get('configured') === '1', back: store.get('configured') === '1' ? '/settings' : '/setup?defaults=1', error: error.message }), 422);
         }
+      }
+      if (path === '/prompt/activate') {
+        const preset = activatePrompt(store, form.get('promptId'), promptPath);
+        store.log('prompt_activated', `Selected prompt ${preset.name}`);
+        return redirect(response, messageUrl('/prompt', `Selected “${preset.name}”. New launches will use it.`));
       }
       if (path === '/setup/jules') {
         const key = form.get('julesKey')?.trim();
@@ -389,6 +404,13 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
         await verifyBinding(store, deps());
         return redirect(response, messageUrl('/settings', 'Jules and GitHub connections, repository identity and branch verified.'));
       }
+      if (path === '/settings/next-number') {
+        const number = Number(form.get('nextProjectNumber'));
+        if (!Number.isSafeInteger(number) || number < 1 || number > 1000000) throw new Error('Enter a next project number from 1 to 1,000,000.');
+        await refresh();
+        const next = store.setNextProjectNumber(number);
+        return redirect(response, messageUrl('/settings', `The next available project number is ${next}.`));
+      }
       if (path === '/projects/reserve') {
         if (store.get('configured') !== '1') return redirect(response, '/setup');
         const topics = (form.get('topics') ?? '').split(/\r?\n/).map(item => item.trim()).filter(Boolean);
@@ -403,6 +425,13 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
         if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Invalid project ID.');
         const removed = store.removeReservation(id);
         return redirect(response, messageUrl('/', `${removed.folder} reservation removed.`));
+      }
+      if (path === '/projects/clear') {
+        if (store.get('configured') !== '1') return redirect(response, '/setup');
+        const category = form.get('category');
+        const count = store.clearProjects(category);
+        const label = { finished: 'finished', reserved: 'reserved', failed: 'failed', stopped: 'stopped' }[category];
+        return redirect(response, messageUrl('/', `${count} ${label} local project${count === 1 ? '' : 's'} cleared.`));
       }
       const sessionAction = path.match(/^\/projects\/([0-9a-f-]{36})\/(approve-plan|reply)$/i);
       const stopAction = path.match(/^\/projects\/([0-9a-f-]{36})\/stop$/i);
