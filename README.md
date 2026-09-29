@@ -52,6 +52,17 @@ npm test
 
 These tests use mocked provider responses. A live end-to-end run requires your own Jules and GitHub credentials and a connected repository. The app does not launch any task merely by testing a connection or reserving directories.
 
+Every push to `main` and pull request into `main` runs the test suite on Linux and Windows with Node.js 22 and 24. Dependabot checks GitHub Actions and npm dependencies monthly.
+
+To publish a version, update `package.json`, `package-lock.json`, and `CHANGELOG.md` together and merge the change into `main`. From that commit, create and push a matching `v` tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Once all four test jobs pass, the workflow creates a GitHub Release with generated notes and downloadable source archives. Releases distribute the local app's source; they do not deploy a server or publish an npm package.
+
 ## Project files
 
 - `src/server.mjs` starts the local server; `src/app.mjs` handles pages, launch scheduling, and polling.
