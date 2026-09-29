@@ -1,7 +1,9 @@
 {
   "name": "research-facility",
   "version": "0.1.0",
+  "description": "Local Jules research launcher with verified GitHub repository binding and pull request checks",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "engines": { "node": ">=22.13.0" },
   "scripts": {
