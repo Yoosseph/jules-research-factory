@@ -22,4 +22,4 @@ The app has no npm runtime dependencies. The test suite uses mocked Jules and Gi
 - Update the README when setup, configuration, or workflow changes.
 - Do not include real API keys, generated databases, or private research material.
 
-Contributions are submitted under the repository's [Apache License 2.0](LICENSE), as described in its contribution terms.
+Contributions to the project are submitted under [GNU AGPLv3 only](LICENSE) (`AGPL-3.0-only`). Keep existing copyright and third-party license notices intact. Bundled fonts and icons retain the terms listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,6 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { julesClient } from '../src/providers.mjs';
+import { julesClient, ProviderError } from '../src/providers.mjs';
+
+test('account sessions are paginated and repeated tokens are rejected', async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async url => {
+    urls.push(String(url));
+    return { ok: true, json: async () => urls.length === 1
+      ? { sessions: [{ name: 'sessions/one', state: 'IN_PROGRESS' }], nextPageToken: 'next' }
+      : { sessions: [{ name: 'sessions/two', state: 'COMPLETED' }] } };
+  };
+  try {
+    assert.equal((await julesClient('test-key').sessions()).length, 2);
+    assert.match(urls[1], /sessions\?pageSize=100&pageToken=next/);
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ sessions: [], nextPageToken: 'same' }) });
+    await assert.rejects(julesClient('test-key').sessions(), /repeated a session page/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('provider quota errors retain retry-after and structured status', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 429, headers: new Headers({ 'retry-after': '600' }), json: async () => ({ error: { message: 'Daily quota exhausted', status: 'RESOURCE_EXHAUSTED' } }) });
+  try {
+    await assert.rejects(julesClient('test-key').sessions(), error => error instanceof ProviderError && error.retryAfterMs === 600000 && error.code === 'RESOURCE_EXHAUSTED');
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('Jules activities are fetched across pages for a session', async () => {
   const originalFetch = globalThis.fetch;

@@ -2,11 +2,13 @@ const JULES = 'https://jules.googleapis.com/v1alpha';
 const GITHUB = 'https://api.github.com';
 
 export class ProviderError extends Error {
-  constructor(provider, status, message) {
+  constructor(provider, status, message, { retryAfterMs = 0, code = '' } = {}) {
     super(message);
     this.name = 'ProviderError';
     this.provider = provider;
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
+    this.code = code;
   }
 }
 
@@ -20,7 +22,9 @@ async function request(provider, url, headers, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const explanation = response.status === 401 ? 'Invalid API key or token' : response.status === 403 ? 'Access denied or rate limited' : body.error?.message ?? body.message ?? response.statusText;
-    throw new ProviderError(provider, response.status, `${provider}: ${explanation}`);
+    const retryAfter = response.headers?.get('retry-after');
+    const retryAfterMs = retryAfter ? Math.max(0, /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now()) : 0;
+    throw new ProviderError(provider, response.status, `${provider}: ${explanation}`, { retryAfterMs, code: body.error?.status ?? '' });
   }
   return body;
 }
@@ -29,6 +33,21 @@ export function julesClient(apiKey) {
   const headers = { 'x-goog-api-key': apiKey, accept: 'application/json' };
   const get = path => request('Jules', `${JULES}${path}`, headers);
   return {
+    async sessions() {
+      const all = [], seenTokens = new Set();
+      let pageToken = '';
+      do {
+        const params = new URLSearchParams({ pageSize: '100' });
+        if (pageToken) params.set('pageToken', pageToken);
+        const page = await get(`/sessions?${params}`);
+        all.push(...(page.sessions ?? []));
+        pageToken = page.nextPageToken ?? '';
+        if (pageToken && seenTokens.has(pageToken)) throw new Error('Jules repeated a session page.');
+        if (pageToken) seenTokens.add(pageToken);
+        if (seenTokens.size > 100) throw new Error('Jules session history is too large to check capacity.');
+      } while (pageToken);
+      return all;
+    },
     async sources() {
       const all = [];
       let pageToken = '';
