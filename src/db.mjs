@@ -90,6 +90,7 @@ export function openStore(directory = '.data') {
       COMMIT;
     `);
   }
+  if (!projectColumns.has('orchestrator_instructions')) db.exec('ALTER TABLE projects ADD COLUMN orchestrator_instructions TEXT');
 
   const set = (name, value) => db.prepare('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(name, String(value));
   const get = name => db.prepare('SELECT value FROM settings WHERE key=?').get(name)?.value;
@@ -171,13 +172,13 @@ export function openStore(directory = '.data') {
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
-  const reserve = topics => {
+  const reserve = (topics, instructions = null) => {
     db.exec('BEGIN IMMEDIATE');
     try {
       let next = nextProjectNumber();
       const generation = currentGeneration();
       const occupied = new Set(db.prepare('SELECT number FROM remote_folders').all().map(item => item.number));
-      const insert = db.prepare('INSERT INTO projects(id,topic,slug,folder_number,folder,number_generation,status,binding_identity,repository_full_name,base_branch,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+      const insert = db.prepare('INSERT INTO projects(id,topic,slug,folder_number,folder,number_generation,status,binding_identity,repository_full_name,base_branch,created_at,updated_at,orchestrator_instructions) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
       const currentBinding = binding();
       if (!currentBinding) throw new Error('No repository binding');
       const identity = `${currentBinding.github_repository_id}|${currentBinding.jules_source_id}|${currentBinding.base_branch}`;
@@ -187,7 +188,7 @@ export function openStore(directory = '.data') {
         const slug = topic.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'Research-Project';
         const id = randomUUID(), number = next++, folder = `${number}-${slug}`;
         const now = new Date().toISOString();
-        insert.run(id, topic, slug, number, folder, generation, 'reserved', identity, currentBinding.github_full_name, currentBinding.base_branch, now, now);
+        insert.run(id, topic, slug, number, folder, generation, 'reserved', identity, currentBinding.github_full_name, currentBinding.base_branch, now, now, instructions);
         occupied.add(number);
         result.push(project(id));
       }
@@ -230,6 +231,7 @@ export function openStore(directory = '.data') {
           set('last_project_number', highest);
         }
         const removeRelated = ['events', 'jules_activities', 'jules_auto_replies'].map(table => db.prepare(`DELETE FROM ${table} WHERE project_id=?`));
+        if (db.prepare("SELECT name FROM sqlite_master WHERE name='agent_packets'").get()) removeRelated.push(db.prepare('DELETE FROM agent_packets WHERE project_id=?'));
         const removeProject = db.prepare('DELETE FROM projects WHERE id=?');
         for (const item of selected) {
           for (const remove of removeRelated) remove.run(item.id);
