@@ -414,11 +414,11 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host)) { response.writeHead(421); response.end('Local access only'); return; }
     const url = new URL(request.url, `http://${host}`);
     const path = url.pathname;
-    if (request.method === 'GET' && ['/style.css','/favicon.svg'].includes(path)) {
+    if (request.method === 'GET' && ['/style.css','/favicon.svg','/favicon-dark.svg'].includes(path)) {
       const file = readFileSync(join(import.meta.dirname, '..', 'public', path.slice(1)));
       response.writeHead(200, { 'content-type': path.endsWith('.css') ? 'text/css; charset=utf-8' : 'image/svg+xml', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(file); return;
     }
-    const interfaceAssets = { '/interface.js': ['interface.js', 'text/javascript; charset=utf-8'], '/fonts/fraunces.ttf': ['fonts/fraunces.ttf', 'font/ttf'], '/fonts/fraunces-italic.ttf': ['fonts/fraunces-italic.ttf', 'font/ttf'], '/fonts/manrope.ttf': ['fonts/manrope.ttf', 'font/ttf'] };
+    const interfaceAssets = { '/interface.js': ['interface.js', 'text/javascript; charset=utf-8'], '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/fonts/fraunces.ttf': ['fonts/fraunces.ttf', 'font/ttf'], '/fonts/fraunces-italic.ttf': ['fonts/fraunces-italic.ttf', 'font/ttf'], '/fonts/manrope.ttf': ['fonts/manrope.ttf', 'font/ttf'] };
     if (request.method === 'GET' && Object.hasOwn(interfaceAssets, path)) {
       const [file, contentType] = interfaceAssets[path];
       response.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
