@@ -4,7 +4,49 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { openStore } from '../src/db.mjs';
-import { bootstrapFromEnv } from '../src/bootstrap.mjs';
+import { bootstrapFromEnv, applyApiKeysFromEnv } from '../src/bootstrap.mjs';
+
+test('environment keys replace saved keys without changing research or repository settings', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'researchforge-keys-'));
+  const store = openStore(directory);
+  try {
+    const settings = { provider: 'nvidia', endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', model: 'saved-model', brief: 'Market research forever', enabled: true, mode: 'continuous', dailyLimit: 0 };
+    store.set('orchestrator', JSON.stringify(settings));
+    store.setSecret('jules', 'old-jules-key');
+    store.setSecret('orchestrator', 'old-nvidia-key');
+    store.set('orchestratorRetryAt', '2099-01-01T00:00:00Z');
+    store.set('orchestratorCount', 7);
+    assert.equal(applyApiKeysFromEnv(store, { JULES_API_KEY: ' new-jules-key ', NVIDIA_API_KEY: ' new-nvidia-key ' }), true);
+    assert.equal(store.getSecret('jules'), 'new-jules-key');
+    assert.equal(store.getSecret('orchestrator'), 'new-nvidia-key');
+    assert.deepEqual(JSON.parse(store.get('orchestrator')), settings);
+    assert.equal(store.get('orchestratorRetryAt'), '');
+    assert.equal(store.get('orchestratorCount'), '7');
+    assert.equal(applyApiKeysFromEnv(store, { JULES_API_KEY: '', NVIDIA_API_KEY: ' ' }), false);
+    assert.equal(store.getSecret('jules'), 'new-jules-key');
+    assert.equal(store.getSecret('orchestrator'), 'new-nvidia-key');
+  } finally {
+    store.db.close();
+    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('NVIDIA environment key initializes a disabled provider and never replaces another provider key', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'researchforge-provider-key-'));
+  const store = openStore(directory);
+  try {
+    applyApiKeysFromEnv(store, { NVIDIA_API_KEY: 'nvidia-key' });
+    assert.equal(store.getSecret('orchestrator'), 'nvidia-key');
+    assert.equal(JSON.parse(store.get('orchestrator')).enabled, false);
+    store.set('orchestrator', JSON.stringify({ provider: 'compatible', endpoint: 'https://example.com/chat/completions' }));
+    store.setSecret('orchestrator', 'compatible-key');
+    assert.equal(applyApiKeysFromEnv(store, { NVIDIA_API_KEY: 'other-nvidia-key' }), false);
+    assert.equal(store.getSecret('orchestrator'), 'compatible-key');
+  } finally {
+    store.db.close();
+    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('complete .env.local values verify and persist setup across restarts', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'researchforge-bootstrap-'));
