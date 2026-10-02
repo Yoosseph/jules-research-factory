@@ -104,7 +104,7 @@ For an account with 15 simultaneous tasks, set **Agents → Agent settings → C
 
 ### 5. Follow the work and read the reports
 
-- **Live flow:** inspect the communication map and recorded conversations. Pause the view to read without stopping research.
+- **Live flow:** watch glowing dots carry messages across the communication map. The diagram shows recent message cards and each node's latest activity. Select a dot or card to read its text, or use **Replay recent** to follow recorded exchanges again. Pause the view to read without stopping research.
 - **Agents:** see the state of each task and open its activity timeline.
 - **Projects:** find assignments and their proposed reports on GitHub.
 - **Prompt:** change the instructions used for future reports.

@@ -4,6 +4,9 @@ Notable project changes are recorded here. Tagged releases will follow [Semantic
 
 ## Unreleased
 
+- Made packet transfers visible for longer with concurrent glowing trails, moving labels, recent-message replay, and message previews directly on the network diagram.
+- Fixed packet pause/resume timing, added motion controls, and retained every transfer in a burst instead of dropping queued events.
+
 - Released the current project under AGPL-3.0-only, preserving bundled asset licenses and the permissions of earlier Apache 2.0 versions.
 - Rewrote the README for first-time users, with research examples, account requirements, setup steps, and guidance for reviewing reports.
 

@@ -50,6 +50,9 @@ test('flow stream publishes new packets and closes cleanly; theme and notice con
     assert.match(page, /data-live-flow/);
     assert.doesNotMatch(page, /http-equiv="refresh"/);
     assert.match(page, /src="\/flow.js"/);
+    assert.match(page, /data-flow-replay/);
+    assert.match(page, /data-map-messages/);
+    assert.match(page, /data-flow-motion/);
     for (const asset of ['/flow.js', '/theme.js', '/favicon-dark.svg']) assert.equal((await fetch(base + asset)).status, 200);
     const response = await fetch(base + '/api/flow/stream', { signal: controller.signal });
     assert.match(response.headers.get('content-type'), /text\/event-stream/);
