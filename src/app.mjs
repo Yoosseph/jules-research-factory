@@ -10,6 +10,8 @@ import { defaultPromptPath, readPromptTemplate, initializePromptLibrary, syncAct
 import { saveActivities } from './activities.mjs';
 import { NVIDIA_ENDPOINT, NVIDIA_MODEL, validateOrchestratorSettings, orchestratorClient, proposeResearch, draftJulesReply } from './orchestrator.mjs';
 import { welcomePage } from './landing-ui.mjs';
+import { initializeFlow, recordPacket, flowSnapshot } from './flow.mjs';
+import { flowPage } from './flow-ui.mjs';
 
 const defaults = store => ({ runtime: store.get('runtime') ?? '30–60', developmentSeeds: Number(store.get('developmentSeeds') ?? 5), finalSeeds: Number(store.get('finalSeeds') ?? 10), concurrency: Number(store.get('concurrency') ?? 10), autoReply: store.get('autoReply') !== '0' });
 const autonomousReply = 'Please continue without waiting for me. Make the reasonable choice that best satisfies the original research prompt and stays inside the assigned project folder. If a source, tool, or approach is unavailable, choose a viable alternative. Document the decision and its limits in the report, complete the requested deliverables, and create the pull request.';
@@ -59,6 +61,7 @@ function idsFrom(value) {
 
 export function createApp(store, { julesFactory = julesClient, githubFactory = githubClient, orchestratorFactory = orchestratorClient, promptPath = defaultPromptPath } = {}) {
   initializePromptLibrary(store, promptPath);
+  initializeFlow(store);
   let schedulerBusy = false;
   let schedulerRerunRequested = false;
   let schedulerPromise;
@@ -71,7 +74,27 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
   const deps = () => ({ jules: julesFactory(julesKey()), github: githubFactory(githubToken()) });
   const orchestratorSettings = () => JSON.parse(store.get('orchestrator') ?? '{}');
   const orchestratorUsage = () => Number(store.get('orchestratorDay') === dateNow().slice(0, 10) ? store.get('orchestratorCount') ?? 0 : 0);
-  const modelClient = () => orchestratorFactory({ ...orchestratorSettings(), apiKey: store.getSecret('orchestrator') });
+  let modelRequests = 0;
+  let capacityCheckedAt = null;
+  let accountActive = null;
+  const modelClient = (projectId = null) => {
+    const client = orchestratorFactory({ ...orchestratorSettings(), apiKey: store.getSecret('orchestrator') });
+    const packetIds = [];
+    const wrapped = async (system, user) => {
+      packetIds.push(recordPacket(store, { projectId, from: 'coordinator', to: 'model', kind: 'request', title: projectId ? 'Requesting a research decision' : 'Requesting a task plan', content: `System instructions\n${system}\n\nTask context\n${user}` }));
+      modelRequests++;
+      try {
+        const answer = await client(system, user);
+        packetIds.push(recordPacket(store, { projectId, from: 'model', to: 'coordinator', kind: 'response', title: projectId ? 'Model decision received' : 'Task plan received', content: JSON.stringify(answer, null, 2) }));
+        return answer;
+      } catch (error) {
+        recordPacket(store, { projectId, from: 'model', to: 'coordinator', kind: 'error', title: 'Model request failed', content: error.message });
+        throw error;
+      } finally { modelRequests--; }
+    };
+    wrapped.packetIds = packetIds;
+    return wrapped;
+  };
   const listSources = async () => julesKey() ? discoverSources(julesKey(), { jules: julesFactory(julesKey()) }) : [];
   const atDailyLimit = () => {
     const limit = orchestratorSettings().dailyLimit;
@@ -105,7 +128,9 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     const external = sessions.filter(session => !['COMPLETED', 'FAILED', 'STOPPED'].includes(session.state) && !names.has(session.name));
     const remoteByName = new Map(sessions.map(session => [session.name, session]));
     const localActive = projects.filter(project => !['COMPLETED', 'FAILED', 'STOPPED'].includes(remoteByName.get(project.jules_session_name)?.state));
-    return localActive.length + external.length;
+    capacityCheckedAt = dateNow();
+    accountActive = localActive.length + external.length;
+    return accountActive;
   }
 
   async function setupView(response, options = {}) {
@@ -154,11 +179,13 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       const prompt = researchPrompt(current, binding, defaults(store), readPromptTemplate(promptPath));
       store.db.prepare('UPDATE projects SET prompt_text=? WHERE id=?').run(prompt, projectId);
       submitted = true;
+      recordPacket(store, { projectId, from: current.orchestrator_instructions ? 'model' : 'coordinator', to: 'jules', kind: 'dispatch', title: `Sending task: ${current.topic}`, content: prompt });
       const session = await julesFactory(julesKey()).createSession({ prompt, title: `${current.folder}: ${current.topic}`.slice(0, 100), sourceName: binding.jules_source_id, branch: binding.base_branch });
       if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(session.name ?? '')) throw new Error('Jules returned no valid session identifier. Check Jules before retrying.');
       const url = /^https:\/\/jules\.google\.com\//.test(session.url ?? '') ? session.url : null;
       store.db.prepare('UPDATE projects SET status=?,jules_state=?,jules_session_name=?,jules_session_url=?,error=NULL,updated_at=? WHERE id=?').run('running', session.state || 'QUEUED', session.name, url, dateNow(), projectId);
       store.log('session_created', `${session.name} launched for ${current.folder}`, projectId);
+      recordPacket(store, { projectId, from: 'jules', to: 'coordinator', kind: 'response', title: 'Jules accepted the task', content: `Session: ${session.name}\nState: ${session.state || 'QUEUED'}` });
       if (current.orchestrator_instructions) {
         const usedToday = orchestratorUsage();
         store.set('orchestratorDay', dateNow().slice(0, 10));
@@ -171,6 +198,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       const retryable = rejected || (!submitted && error.status >= 500);
       store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run(retryable ? 'queued' : 'blocked', error.message, dateNow(), projectId);
       store.log(retryable ? 'launch_deferred' : 'launch_blocked', error.message, projectId);
+      recordPacket(store, { projectId, from: 'jules', to: 'coordinator', kind: 'error', title: retryable ? 'Launch deferred' : 'Launch blocked', content: error.message });
       deferResearch(error);
     }
   }
@@ -229,6 +257,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
         if (store.get('orchestrator') !== JSON.stringify(settings)) throw new Error('Orchestrator settings changed while checking Jules capacity.');
         const instructions = `${proposal.instructions}\n\nWork autonomously: do not ask the user questions or wait for clarification. Choose reasonable assumptions and accessible public sources. Document gaps and finish the report and pull request inside the assigned folder.`;
         [project] = store.reserve([proposal.topic], instructions);
+        for (const packetId of planningClient.packetIds) store.db.prepare('UPDATE agent_packets SET project_id=? WHERE id=?').run(project.id, packetId);
         store.log('orchestrator_proposed', `Model proposed ${project.folder}`, project.id);
         await launchResearchBatch([project.id]);
         await schedule();
@@ -296,13 +325,16 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     const claimed = store.db.prepare("INSERT OR IGNORE INTO jules_auto_replies(activity_name,project_id,status,created_at,updated_at) VALUES (?,?,'sending',?,?)").run(question.name, project.id, now, now);
     if (claimed.changes !== 1) return;
     try {
+      recordPacket(store, { projectId: project.id, from: replyFrom, to: 'jules', kind: 'reply', title: 'Sending an automatic reply', content: reply });
       await jules.sendMessage(project.jules_session_name, reply);
       store.db.prepare("UPDATE jules_auto_replies SET status='sent',updated_at=? WHERE activity_name=?").run(dateNow(), question.name);
       store.log('auto_feedback_sent', `Answered a Jules question for ${project.folder} using the autonomous research policy`, project.id);
+      recordPacket(store, { projectId: project.id, from: 'jules', to: 'coordinator', kind: 'response', title: 'Reply accepted by Jules', content: 'The message was accepted. Waiting for the next Jules update.' });
     } catch (error) {
       // A timed-out request may have reached Jules. Never send the same reply twice automatically.
       store.db.prepare("UPDATE jules_auto_replies SET status='uncertain',error=?,updated_at=? WHERE activity_name=?").run(error.message, dateNow(), question.name);
       store.log('auto_feedback_error', error.message, project.id);
+      recordPacket(store, { projectId: project.id, from: 'jules', to: 'coordinator', kind: 'error', title: 'Reply delivery uncertain', content: error.message });
     }
   }
 
@@ -319,6 +351,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     if (claimed.changes !== 1) return;
     try {
       await jules.approvePlan(project.jules_session_name);
+      recordPacket(store, { projectId: project.id, from: 'coordinator', to: 'jules', kind: 'approval', title: 'Plan approved automatically', content: 'Research Facility approved the generated plan.' });
       store.db.prepare("UPDATE jules_auto_replies SET status='sent',updated_at=? WHERE activity_name=?").run(dateNow(), plan.name);
       store.log('auto_plan_approved', `Approved Jules plan for ${project.folder}`, project.id);
     } catch (error) {
@@ -337,6 +370,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
         try {
           const jules = julesFactory(julesKey());
           const session = await jules.session(project.jules_session_name);
+          if (session.state && session.state !== project.jules_state) recordPacket(store, { projectId: project.id, from: 'jules', to: 'coordinator', kind: 'state', title: 'Jules state changed', content: session.state.replaceAll('_', ' ') });
           store.db.prepare('UPDATE projects SET jules_state=?,jules_polled_at=? WHERE id=?').run(session.state || 'STATE_UNSPECIFIED', dateNow(), project.id);
           try {
             const activities = await jules.activities(project.jules_session_name);
@@ -362,6 +396,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
             const checked = await validatePullRequest(prUrl, project, binding, githubFactory(githubToken()));
             store.db.prepare('UPDATE projects SET status=?,pr_url=?,pr_status=?,updated_at=? WHERE id=?').run('pr_validated', prUrl, checked.status, dateNow(), project.id);
             store.log('pr_validated', `Pull request validated for ${project.folder}`, project.id);
+            recordPacket(store, { projectId: project.id, from: 'jules', to: 'repository', kind: 'report', title: 'Report pull request validated', content: prUrl });
           }
         } catch (error) {
           if (error instanceof BindingError) {
@@ -409,6 +444,24 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
   void pollSessions();
   void runOrchestrator();
 
+  const flowClients = new Set();
+  const liveSnapshot = () => ({ ...flowSnapshot(store, { modelBusy: modelRequests > 0 }), capacityCheckedAt, accountActive });
+  let lastFlowFrame = '';
+  const flowTimer = setInterval(() => {
+    if (!flowClients.size) return;
+    const snapshot = liveSnapshot();
+    const frame = JSON.stringify({ ...snapshot, serverTime: undefined });
+    if (frame === lastFlowFrame) return;
+    lastFlowFrame = frame;
+    for (const client of flowClients) {
+      if (client.writableLength > 1024 * 1024) { client.destroy(); flowClients.delete(client); }
+      else client.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    }
+  }, 1000);
+  flowTimer.unref();
+  const flowHeartbeat = setInterval(() => { for (const client of flowClients) client.write(': heartbeat\n\n'); }, 15000);
+  flowHeartbeat.unref();
+
   const server = createServer(async (request, response) => {
     const host = request.headers.host ?? '';
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host)) { response.writeHead(421); response.end('Local access only'); return; }
@@ -418,7 +471,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       const file = readFileSync(join(import.meta.dirname, '..', 'public', path.slice(1)));
       response.writeHead(200, { 'content-type': path.endsWith('.css') ? 'text/css; charset=utf-8' : 'image/svg+xml', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(file); return;
     }
-    const interfaceAssets = { '/interface.js': ['interface.js', 'text/javascript; charset=utf-8'], '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/fonts/fraunces.ttf': ['fonts/fraunces.ttf', 'font/ttf'], '/fonts/fraunces-italic.ttf': ['fonts/fraunces-italic.ttf', 'font/ttf'], '/fonts/manrope.ttf': ['fonts/manrope.ttf', 'font/ttf'] };
+    const interfaceAssets = { '/interface.js': ['interface.js', 'text/javascript; charset=utf-8'], '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/fonts/fraunces.ttf': ['fonts/fraunces.ttf', 'font/ttf'], '/fonts/fraunces-italic.ttf': ['fonts/fraunces-italic.ttf', 'font/ttf'], '/fonts/manrope.ttf': ['fonts/manrope.ttf', 'font/ttf'] };
     if (request.method === 'GET' && Object.hasOwn(interfaceAssets, path)) {
       const [file, contentType] = interfaceAssets[path];
       response.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
@@ -427,6 +480,22 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     }
     try {
       if (request.method === 'GET') {
+        if (['/flow', '/api/flow', '/api/flow/stream'].includes(path)) {
+          if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
+          if (path === '/flow') return html(response, flowPage());
+          if (path === '/api/flow/stream') {
+            response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+            response.write(`event: snapshot\ndata: ${JSON.stringify(liveSnapshot())}\n\n`);
+            flowClients.add(response);
+            response.on('close', () => flowClients.delete(response));
+            return;
+          }
+          const projectId = url.searchParams.get('project');
+          if (projectId && !store.project(projectId)) { response.writeHead(404); response.end('Task not found'); return; }
+          response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+          response.end(JSON.stringify(flowSnapshot(store, { projectId, modelBusy: modelRequests > 0 })));
+          return;
+        }
         if (path === '/welcome') return html(response, welcomePage({ configured: store.get('configured') === '1' && !!store.binding() }));
         if (path === '/') {
           if (store.get('configured') !== '1' || !store.binding()) return html(response, welcomePage());
@@ -664,6 +733,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
           } else {
             if (!['AWAITING_USER_FEEDBACK', 'PAUSED'].includes(session.state)) throw new Error('Jules is no longer waiting for a reply. Refresh the project.');
             await jules.sendMessage(project.jules_session_name, reply);
+            recordPacket(store, { projectId, from: 'coordinator', to: 'jules', kind: 'reply', title: 'Manual reply accepted', content: reply });
             const question = store.db.prepare("SELECT name FROM jules_activities WHERE project_id=? AND kind='message' AND originator='agent' ORDER BY created_at DESC,name DESC LIMIT 1").get(projectId);
             if (question) {
               const now = dateNow();
@@ -689,5 +759,5 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       redirect(response, messageUrl(destination, error.message, 'error'));
     }
   });
-  return { server, close: () => { closed = true; clearInterval(timer); server.close(); }, launchResearchProject, launchResearchBatch, pollSessions, schedule, runOrchestrator };
+  return { server, close: () => { closed = true; clearInterval(timer); clearInterval(flowTimer); clearInterval(flowHeartbeat); for (const client of flowClients) client.end(); flowClients.clear(); server.close(); }, launchResearchProject, launchResearchBatch, pollSessions, schedule, runOrchestrator };
 }

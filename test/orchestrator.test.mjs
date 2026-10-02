@@ -157,6 +157,9 @@ test('continuous research refills a completed account slot before its activity p
     await app.runOrchestrator();
     assert.equal(attempts(), 3);
     assert.equal([...remote.values()].filter(s => s.state === 'IN_PROGRESS').length, 2);
+    const packets = store.db.prepare('SELECT * FROM agent_packets WHERE project_id=?').all(store.projects()[0].id);
+    assert.ok(packets.some(p => p.from_node === 'model' && p.kind === 'response'));
+    assert.ok(packets.some(p => p.to_node === 'jules' && p.kind === 'dispatch'));
   });
 });
 

@@ -15,9 +15,9 @@ const repositoryHelp = error => error?.startsWith('Could not locate') || error?.
 const step = (n, title, current) => `<div class="step ${n === current ? 'current' : n < current ? 'done' : ''}"><span>${n}</span>${esc(title)}</div>`;
 
 export function layout(title, body, { configured = false, refresh = false, autoRefresh = false, landing = false } = {}) {
-  const activeTitle = { '/welcome': 'Research automation', '/': 'Projects', '/activity': 'Jules agents', '/orchestrator': 'Research orchestrator', '/prompt': 'Research prompt', '/settings': 'Connection' };
+  const activeTitle = { '/welcome': 'Research automation', '/flow': 'Live flow', '/': 'Projects', '/activity': 'Jules agents', '/orchestrator': 'Research orchestrator', '/prompt': 'Research prompt', '/settings': 'Connection' };
   const navLink = (href, label) => `<a href="${href}"${title === activeTitle[href] ? ' aria-current="page"' : ''}>${label}</a>`;
-  const navigation = configured ? `${navLink('/welcome', 'Overview')}${navLink('/', 'Projects')}${navLink('/activity', 'Agents')}${navLink('/orchestrator', 'Orchestrator')}${navLink('/prompt', 'Prompt')}${navLink('/settings', 'Connection')}` : `<a href="/welcome">Overview</a><a aria-current="page" href="/setup">Connect workspace</a>`;
+  const navigation = configured ? `${navLink('/flow', 'Live flow')}${navLink('/', 'Projects')}${navLink('/activity', 'Agents')}${navLink('/orchestrator', 'Orchestrator')}${navLink('/prompt', 'Prompt')}${navLink('/settings', 'Connection')}` : `<a href="/welcome">Overview</a><a aria-current="page" href="/setup">Connect workspace</a>`;
   // Give existing directional links the same Lucide treatment as the new screens.
   const content = body.replace(/<div class="notice([^"]*)"([^>]*)>([\s\S]*?)<\/div>/g, (match, classes, attrs, content) => `<div class="notice ${classes.includes('success') ? 'success' : /denied|rejected|forbidden|failed|invalid|mismatch|did not return/i.test(content.replace(/<[^>]*>/g, '')) ? 'error' : 'action'}"${attrs}>${content}</div>`).replace(/(<a\b[^>]*>)([^<]*)(<\/a>)/g, (match, start, label, end) => {
     if (label.startsWith('← ')) return `${start}${icon('arrow-left')} ${label.slice(2)}${end}`;

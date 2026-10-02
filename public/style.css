@@ -2058,6 +2058,54 @@ code {
   }
 }
 
+/* Communication map */
+.flow-controls { display:flex; align-items:center; gap:16px; }
+.flow-connection { font-size:.7rem; color:var(--quiet); }
+.flow-connection.connected { color:#397451; }
+.flow-stage { position:relative; height:435px; border:1px solid #69213a; border-radius:14px; overflow:hidden; background:radial-gradient(ellipse at 30% 10%,#932c47a0,transparent 65%),linear-gradient(145deg,#401824,#201319); color:#fae7ee; }
+.flow-stage::before { content:''; position:absolute; inset:0; background-image:radial-gradient(#f3b8c61c 1px,transparent 1px); background-size:22px 22px; pointer-events:none; }
+.flow-stage-heading { position:relative; z-index:1; display:flex; justify-content:space-between; align-items:center; padding:24px 28px; gap:16px; }
+.flow-stage-heading .eyebrow { color:#e1bbc8; }
+.flow-stage-heading>span:last-child { font-size:.72rem; color:#d1a7b6; }
+.flow-wires { position:absolute; left:0; top:40px; width:100%; height:380px; overflow:visible; }
+.flow-wires path { fill:none; stroke:#c47b9455; stroke-width:1; vector-effect:non-scaling-stroke; }
+.flow-packet { fill:#ffbacf; stroke:#fff1f5; stroke-width:2; cursor:pointer; filter:drop-shadow(0 0 7px #ff6b99); }
+.flow-packet.packet-error { fill:#ef5f60; }
+.flow-node { position:absolute; width:190px; min-height:116px; padding:19px 15px; border:1px solid #ba779366; border-radius:10px; color:#f7d9e4; background:linear-gradient(140deg,#5d2136,#351722); transform:translate(-50%,-50%); box-shadow:0 12px 30px -12px #0d0509a0; display:flex; flex-direction:column; align-items:center; gap:7px; text-align:center; transition:border-color .2s,background .2s; }
+.flow-node .icon { width:25px; height:25px; }
+.flow-node-name { font-size:.8rem; font-weight:700; }
+.flow-node small { max-width:100%; overflow-wrap:anywhere; font-size:.61rem; color:#d3aaba; line-height:1.5; }
+.flow-node:hover,.flow-node[aria-pressed=true] { border-color:#ffd0df; background:#6b2940; }
+.flow-node:focus-visible { outline-color:#ffbfd4; }
+.node-model { left:18%; top:175px; }
+.node-jules { left:50%; top:175px; }
+.node-repository { left:82%; top:175px; }
+.node-coordinator { left:50%; top:340px; width:178px; min-height:92px; padding:12px; }
+.node-working { border-color:#eab6c9; box-shadow:0 0 26px -8px #ce7291; }
+.flow-transfer { position:absolute; left:24px; bottom:22px; width:28%; color:#dca7b9; font-size:.66rem; line-height:1.6; }
+.flow-source-note { color:var(--quiet); font-size:.71rem; margin:17px 0 28px; }
+.flow-workspace { display:grid; grid-template-columns:minmax(0,.75fr) minmax(0,1.2fr) minmax(0,1fr); gap:18px; align-items:start; }
+.flow-workspace>.panel { padding:23px; min-width:0; }
+.flow-workspace h2 { font-size:1.45rem; }
+.flow-agents select { font-size:.73rem; }
+[data-flow-agents] { max-height:520px; overflow:auto; margin-top:21px; }
+.flow-agent { width:100%; text-align:left; display:flex; flex-direction:column; gap:8px; padding:15px 0; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; color:var(--text); }
+.flow-agent strong { font-size:.75rem; line-height:1.6; }
+.flow-agent small { color:var(--quiet); font-size:.62rem; overflow-wrap:anywhere; }
+.flow-agent-state { color:var(--crimson); font-size:.65rem; }
+.flow-agent[aria-pressed=true] { border-left:2px solid var(--crimson); padding-left:12px; }
+.flow-chat { height:540px; overflow:auto; padding-right:5px; }
+.flow-message { width:100%; display:flex; flex-direction:column; gap:7px; text-align:left; padding:16px; margin:0 0 10px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--text); }
+.flow-message:hover,.flow-message[aria-pressed=true] { border-color:var(--crimson); }
+.flow-message strong { font-size:.77rem; line-height:1.6; }
+.message-route { color:var(--quiet); font-size:.59rem; line-height:1.6; }
+.message-preview { color:var(--muted); font-size:.69rem; line-height:1.75; overflow-wrap:anywhere; white-space:pre-wrap; }
+.message-error { border-left:3px solid #b63740; }
+.flow-inspector { position:sticky; top:24px; }
+.flow-inspector h2 { margin-top:16px; overflow-wrap:anywhere; }
+.flow-inspector pre { font-family:var(--sans); font-size:.76rem; line-height:1.85; white-space:pre-wrap; overflow-wrap:anywhere; max-height:590px; overflow:auto; padding:0; background:transparent; border:0; color:var(--text); }
+.flow-paused .flow-packet { visibility:hidden; }
+.flow-conversation .text-link { background:transparent; border:0; color:var(--crimson); padding:0; font-size:.66rem; }
 .brand-link { font-family:var(--serif); font-weight:540; font-size:1.28rem; letter-spacing:-.045em; line-height:1.1; }
 .brand-link:hover { text-decoration:none; }
 .theme-toggle { display:grid; place-items:center; width:42px; height:42px; padding:0; border:1px solid transparent; border-radius:50%; background:transparent; color:var(--crimson); transition:background .2s,transform .2s; }
@@ -2087,3 +2135,5 @@ code {
 [data-theme=dark] .flow-connection.connected { color:#99cdaa; }
 [data-theme=dark] .report-icon,[data-theme=dark] .step.current,[data-theme=dark] .step.done,[data-theme=dark] .repo-option:has(input:checked),[data-theme=dark] .autonomy-setting { background:#442838; border-color:#855369; color:var(--text); }
 [data-theme=dark] .topbar nav a[aria-current] { background:transparent; }
+@media(max-width:1000px) { .flow-workspace { grid-template-columns:minmax(0,.8fr) minmax(0,1.3fr); } .flow-inspector { grid-column:1/-1; position:static; } .flow-inspector pre { max-height:350px; } .flow-node { width:160px; } }
+@media(max-width:700px) { .flow-controls { flex-wrap:wrap; } .flow-workspace { grid-template-columns:1fr; } .flow-inspector { grid-column:auto; } .flow-stage { height:365px; } .flow-wires { height:310px; top:35px; } .flow-node { width:28%; padding:12px 7px; min-height:105px; } .node-model,.node-jules,.node-repository { top:145px; } .node-coordinator { top:288px; width:36%; min-height:83px; } .flow-node-name { font-size:.65rem; } .flow-node small { font-size:.55rem; } .flow-stage-heading { padding:18px 16px; } .flow-stage-heading .eyebrow { font-size:.52rem; letter-spacing:.09em; } .flow-stage-heading>span:last-child { font-size:.6rem; } .flow-transfer { left:16px; bottom:16px; font-size:.58rem; width:29%; } .flow-chat { height:400px; } }
