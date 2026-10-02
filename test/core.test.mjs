@@ -43,6 +43,20 @@ test('missing main offers branches and never chooses one silently', async () => 
   });
 });
 
+test('accepted keys distinguish missing repositories from stale Jules source identifiers', async () => {
+  await assert.rejects(() => verifyRepository(input, { jules: { ...jules, sources: async () => [] }, github }), error => {
+    assert.equal(error.details.code, 'SOURCE_MISSING');
+    assert.match(error.message, /API key was accepted/);
+    assert.match(error.message, /0 connected repositories/);
+    return true;
+  });
+  await assert.rejects(() => verifyRepository({ ...input, sourceName: 'sources/previous-id' }, { jules, github }), error => {
+    assert.equal(error.details.code, 'SOURCE_CHANGED');
+    assert.match(error.message, /saved source identifier has changed/);
+    return true;
+  });
+});
+
 test('private repository access failures identify the token setting to check', async () => {
   const inaccessibleRepo = { ...github, repo: async () => { const error = new Error('Not Found'); error.status = 404; throw error; } };
   await assert.rejects(() => verifyRepository(input, { jules, github: inaccessibleRepo }), /resource owner and selected repositories/);

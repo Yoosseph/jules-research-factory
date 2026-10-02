@@ -26,7 +26,8 @@ export async function verifyRepository({ julesKey, githubToken, owner, repo, bra
   const sources = await jules.sources();
   const matching = sources.filter(item => same(item.githubRepo.owner, owner) && same(item.githubRepo.repo, repo));
   const source = sourceName ? matching.find(item => item.name === sourceName) : matching[0];
-  if (!source) throw new BindingError(`Could not locate ${owner}/${repo} in Jules. Grant Jules access in its web app, then retry.`, { code: 'SOURCE_MISSING' });
+  if (!matching.length) throw new BindingError(`Could not locate ${owner}/${repo} in Jules. The API key was accepted, but this repository is not in the ${sources.length} connected repositories returned by Jules. Add it in Jules using the same account as the API key, or choose another repository.`, { code: 'SOURCE_MISSING' });
+  if (!source) throw new BindingError(`Jules can access ${owner}/${repo}, but its saved source identifier has changed. Reconnect this repository to refresh the binding.`, { code: 'SOURCE_CHANGED' });
   const detailed = await jules.source(source.name);
   if (detailed.name !== source.name || !same(detailed.githubRepo?.owner, owner) || !same(detailed.githubRepo?.repo, repo)) {
     throw new BindingError(`Repository binding mismatch: Jules source ${source.name} does not match ${owner}/${repo}.`);
@@ -110,7 +111,8 @@ export function verifyProjectBinding(projects, binding) {
 }
 
 export function researchPrompt(project, binding, defaults, template = readPromptTemplate()) {
-  return renderPrompt(template, project, binding, defaults);
+  const rendered = renderPrompt(template, project, binding, defaults);
+  return project.orchestrator_instructions ? `${rendered.trimEnd()}\n\nTask-specific research plan:\n${project.orchestrator_instructions}\n\nKeep all work inside ${project.folder}/ and follow the repository and branch constraints above.\n` : rendered;
 }
 
 export function parsePullRequestUrl(url, binding) {
