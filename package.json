@@ -1,9 +1,9 @@
 {
   "name": "research-facility",
   "version": "0.1.0",
-  "description": "Local Jules research launcher with verified GitHub repository binding and pull request checks",
+  "description": "Automate ongoing market research with an AI planner, Jules agents, live conversations, and organized GitHub reports",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "engines": { "node": ">=22.13.0" },
   "scripts": {

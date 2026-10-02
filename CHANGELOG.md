@@ -4,6 +4,9 @@ Notable project changes are recorded here. Tagged releases will follow [Semantic
 
 ## Unreleased
 
+- Released the current project under AGPL-3.0-only, preserving bundled asset licenses and the permissions of earlier Apache 2.0 versions.
+- Rewrote the README for first-time users, with research examples, account requirements, setup steps, and guidance for reviewing reports.
+
 - Added a live communication map with animated recorded transfers, agent filters, readable conversations, message inspection, and pause/resume controls.
 - Streamed local activity updates without reloading the view and redacted saved credentials from conversation data.
 - Added persistent light/dark themes through the orbital logo control and a matching browser favicon; standardized orange action, red failure, and green success notices.
