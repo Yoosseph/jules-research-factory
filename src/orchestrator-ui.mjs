@@ -23,7 +23,7 @@ export function orchestratorPage({ settings, hasKey, csrfToken, message, error, 
           ${section('01', 'Research brief')}
           <p class="help">Describe the subjects, priorities, and sources for new research tasks.</p>
           <label for="brief">Research direction</label><textarea id="brief" name="brief" rows="7" maxlength="4000" required placeholder="Explore emerging markets. Find underserved customer needs, compare competitors and pricing, and identify promising opportunities. Choose your own scope, cite public sources, and keep going.">${esc(settings.brief ?? '')}</textarea>
-          
+
         </section>
         <section class="config-section" aria-label="Research model">
           ${section('02', 'Model connection')}
