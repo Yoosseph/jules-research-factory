@@ -5,15 +5,17 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { discoverSources, verifyRepository, verifyBinding, verifyReservations, verifyProjectBinding, researchPrompt, validatePullRequest, BindingError } from './core.mjs';
 import { julesClient, githubClient } from './providers.mjs';
 import { setupPage, dashboardPage, preflightPage, settingsPage, guidePage, layout, styleHash } from './ui.mjs';
-import { promptPage, activityPage, agentSettingsPage, projectPage } from './work-ui.mjs';
+import { promptPage, activityPage, agentSettingsPage, projectPage, orchestratorPage } from './work-ui.mjs';
 import { defaultPromptPath, readPromptTemplate, initializePromptLibrary, syncActivePrompt, promptLibrary, saveActivePrompt, savePromptAsNew, activatePrompt } from './prompt.mjs';
 import { saveActivities } from './activities.mjs';
+import { NVIDIA_ENDPOINT, NVIDIA_MODEL, validateOrchestratorSettings, orchestratorClient, proposeResearch, draftJulesReply } from './orchestrator.mjs';
+import { welcomePage } from './landing-ui.mjs';
 
 const defaults = store => ({ runtime: store.get('runtime') ?? '30–60', developmentSeeds: Number(store.get('developmentSeeds') ?? 5), finalSeeds: Number(store.get('finalSeeds') ?? 10), concurrency: Number(store.get('concurrency') ?? 10), autoReply: store.get('autoReply') !== '0' });
 const autonomousReply = 'Please continue without waiting for me. Make the reasonable choice that best satisfies the original research prompt and stays inside the assigned project folder. If a source, tool, or approach is unavailable, choose a viable alternative. Document the decision and its limits in the report, complete the requested deliverables, and create the pull request.';
 const csrfToken = randomBytes(32).toString('hex');
 const safeEqual = (a, b) => { const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? ''); return x.length === y.length && timingSafeEqual(x, y); };
-const html = (response, body, status = 200) => { response.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': `default-src 'self'; style-src 'sha256-${styleHash}'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` }); response.end(body); };
+const html = (response, body, status = 200) => { response.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': `default-src 'self'; style-src 'sha256-${styleHash}'; font-src 'self'; script-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` }); response.end(body); };
 const redirect = (response, path) => { response.writeHead(303, { location: path, 'cache-control': 'no-store' }); response.end(); };
 const dateNow = () => new Date().toISOString();
 const messageUrl = (path, message, type = 'message') => `${path}${path.includes('?') ? '&' : '?'}${type}=${encodeURIComponent(message)}`;
@@ -27,8 +29,8 @@ function parseDefaults(form) {
   if (!['15–30', '30–60', '60–120'].includes(runtime) ||
       !Number.isInteger(developmentSeeds) || developmentSeeds < 1 || developmentSeeds > 100 ||
       !Number.isInteger(finalSeeds) || finalSeeds < 1 || finalSeeds > 100 ||
-      !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 50) {
-    throw new Error('Choose a runtime and enter whole-number seeds (1–100) and concurrency (1–50).');
+      !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 60) {
+    throw new Error('Choose a runtime and enter whole-number seeds (1–100) and concurrency (1–60).');
   }
   return { runtime, developmentSeeds, finalSeeds, concurrency };
 }
@@ -55,16 +57,56 @@ function idsFrom(value) {
   return ids;
 }
 
-export function createApp(store, { julesFactory = julesClient, githubFactory = githubClient, promptPath = defaultPromptPath } = {}) {
+export function createApp(store, { julesFactory = julesClient, githubFactory = githubClient, orchestratorFactory = orchestratorClient, promptPath = defaultPromptPath } = {}) {
   initializePromptLibrary(store, promptPath);
   let schedulerBusy = false;
   let schedulerRerunRequested = false;
+  let schedulerPromise;
   let pollingBusy = false;
+  let orchestratorBusy = false;
+  let closed = false;
   const sessionRepliesInFlight = new Set();
   const julesKey = () => store.getSecret('jules') ?? process.env.JULES_API_KEY;
   const githubToken = () => store.getSecret('github') ?? process.env.GITHUB_TOKEN;
   const deps = () => ({ jules: julesFactory(julesKey()), github: githubFactory(githubToken()) });
+  const orchestratorSettings = () => JSON.parse(store.get('orchestrator') ?? '{}');
+  const orchestratorUsage = () => Number(store.get('orchestratorDay') === dateNow().slice(0, 10) ? store.get('orchestratorCount') ?? 0 : 0);
+  const modelClient = () => orchestratorFactory({ ...orchestratorSettings(), apiKey: store.getSecret('orchestrator') });
   const listSources = async () => julesKey() ? discoverSources(julesKey(), { jules: julesFactory(julesKey()) }) : [];
+  const atDailyLimit = () => {
+    const limit = orchestratorSettings().dailyLimit;
+    return limit > 0 && orchestratorUsage() >= limit;
+  };
+  const coolingDown = () => Date.parse(store.get('orchestratorRetryAt') ?? '') > Date.now();
+  const continuous = () => {
+    const settings = orchestratorSettings();
+    return settings.enabled && settings.mode === 'continuous';
+  };
+  function resetCooldown() {
+    store.set('orchestratorRetryAt', '');
+    store.set('orchestratorFailures', 0);
+    store.set('orchestratorLastError', '');
+  }
+  function deferResearch(error) {
+    const failures = Math.min(10, Number(store.get('orchestratorFailures') ?? 0) + 1);
+    const minimum = [401, 403].includes(error.status) && error.code !== 'RESOURCE_EXHAUSTED' ? 3600000 : error.status === 429 || error.code === 'RESOURCE_EXHAUSTED' ? 300000 : 60000;
+    const delay = Math.max(Math.min(3600000, minimum * 2 ** (failures - 1)), error.retryAfterMs || 0);
+    store.set('orchestratorFailures', failures);
+    store.set('orchestratorRetryAt', new Date(Date.now() + delay).toISOString());
+    store.set('orchestratorLastError', error.message);
+    store.log('orchestrator_waiting', error.message);
+  }
+  async function occupiedSlots(includeQueued = false) {
+    const projects = store.projects().filter(project => ['launching', 'running', ...(includeQueued ? ['queued'] : [])].includes(project.status));
+    const names = new Set(projects.map(project => project.jules_session_name).filter(Boolean));
+    const client = julesFactory(julesKey());
+    // Include tasks started outside this app; Jules owns the account-wide quota.
+    const sessions = client.sessions ? await client.sessions() : [];
+    const external = sessions.filter(session => !['COMPLETED', 'FAILED', 'STOPPED'].includes(session.state) && !names.has(session.name));
+    const remoteByName = new Map(sessions.map(session => [session.name, session]));
+    const localActive = projects.filter(project => !['COMPLETED', 'FAILED', 'STOPPED'].includes(remoteByName.get(project.jules_session_name)?.state));
+    return localActive.length + external.length;
+  }
 
   async function setupView(response, options = {}) {
     const binding = store.binding();
@@ -103,6 +145,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     const project = store.project(projectId);
     if (!project || project.status !== 'queued') return;
     const binding = store.binding();
+    let submitted = false;
     try {
       await checkedProjects([projectId], ['queued']);
       const current = store.project(projectId);
@@ -110,14 +153,25 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       store.log('launching', `Starting ${current.folder} in ${binding.github_full_name}`, projectId);
       const prompt = researchPrompt(current, binding, defaults(store), readPromptTemplate(promptPath));
       store.db.prepare('UPDATE projects SET prompt_text=? WHERE id=?').run(prompt, projectId);
+      submitted = true;
       const session = await julesFactory(julesKey()).createSession({ prompt, title: `${current.folder}: ${current.topic}`.slice(0, 100), sourceName: binding.jules_source_id, branch: binding.base_branch });
       if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(session.name ?? '')) throw new Error('Jules returned no valid session identifier. Check Jules before retrying.');
       const url = /^https:\/\/jules\.google\.com\//.test(session.url ?? '') ? session.url : null;
-      store.db.prepare('UPDATE projects SET status=?,jules_state=?,jules_session_name=?,jules_session_url=?,updated_at=? WHERE id=?').run('running', session.state || 'QUEUED', session.name, url, dateNow(), projectId);
+      store.db.prepare('UPDATE projects SET status=?,jules_state=?,jules_session_name=?,jules_session_url=?,error=NULL,updated_at=? WHERE id=?').run('running', session.state || 'QUEUED', session.name, url, dateNow(), projectId);
       store.log('session_created', `${session.name} launched for ${current.folder}`, projectId);
+      if (current.orchestrator_instructions) {
+        const usedToday = orchestratorUsage();
+        store.set('orchestratorDay', dateNow().slice(0, 10));
+        store.set('orchestratorCount', usedToday + 1);
+        resetCooldown();
+      }
     } catch (error) {
-      store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run('blocked', error.message, dateNow(), projectId);
-      store.log('launch_blocked', error.message, projectId);
+      // Only a definite rejection or a failure before submission can be retried.
+      const rejected = [401, 403, 429].includes(error.status) || error.code === 'RESOURCE_EXHAUSTED';
+      const retryable = rejected || (!submitted && error.status >= 500);
+      store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run(retryable ? 'queued' : 'blocked', error.message, dateNow(), projectId);
+      store.log(retryable ? 'launch_deferred' : 'launch_blocked', error.message, projectId);
+      deferResearch(error);
     }
   }
 
@@ -135,39 +189,114 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
     void schedule();
   }
 
-  async function schedule() {
-    if (schedulerBusy) { schedulerRerunRequested = true; return; }
-    if (store.get('configured') !== '1') return;
-    schedulerBusy = true;
-    try {
-      let active = store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('launching','running')").get().n;
-      const limit = defaults(store).concurrency;
-      const queued = store.db.prepare("SELECT id FROM projects WHERE status='queued' ORDER BY folder_number").all();
-      for (const item of queued) {
-        if (active >= limit) break;
-        active++;
-        await launchResearchProject(item.id);
-      }
-    } finally {
-      schedulerBusy = false;
-      if (schedulerRerunRequested) { schedulerRerunRequested = false; void schedule(); }
+  async function runOrchestrator(manual = false) {
+    if (manual && orchestratorBusy) throw new Error('An orchestrator attempt is already running. Wait for it to finish.');
+    if (closed || orchestratorBusy || store.get('configured') !== '1' || !store.binding()) return null;
+    const settings = orchestratorSettings();
+    if ((!manual && !settings.enabled) || !store.getSecret('orchestrator') || !settings.brief) return null;
+    if (manual && atDailyLimit()) throw new Error('The app daily task cap has been reached. Increase it or set it to 0 under Launch settings.');
+    if (manual && coolingDown()) throw new Error(`Research is paused until ${store.get('orchestratorRetryAt')}. ${store.get('orchestratorLastError') || 'A provider retry is pending.'}`);
+    if (atDailyLimit() || coolingDown()) return null;
+    if (!manual) {
+      const last = Date.parse(store.get('orchestratorLastAttempt') ?? '');
+      if (settings.mode !== 'continuous' && Number.isFinite(last) && Date.now() - last < settings.intervalHours * 3600000) return null;
+      const pending = store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('reserved','queued','launching','running')").get().n;
+      if (settings.mode !== 'continuous' && pending) return null;
     }
+    orchestratorBusy = true;
+    let project;
+    let firstProject;
+    try {
+      await schedule();
+      do {
+        if (closed || coolingDown() || atDailyLimit() || (!manual && !orchestratorSettings().enabled)) break;
+        if (await occupiedSlots(true) >= defaults(store).concurrency) break;
+        store.set('orchestratorLastAttempt', dateNow());
+        project = null;
+        const binding = await refresh();
+        const recentTopics = store.projects().slice(0, 30).map(project => project.topic);
+        const planningClient = modelClient();
+        const proposal = await proposeResearch(planningClient, { brief: settings.brief, repository: binding.fullName, recentTopics });
+        if (closed) return null;
+        const currentBinding = store.binding();
+        if (store.get('orchestrator') !== JSON.stringify(settings) || currentBinding.github_repository_id !== binding.githubId || currentBinding.base_branch !== binding.branch || currentBinding.jules_source_id !== binding.sourceName) {
+          throw new Error('Orchestrator settings or repository changed during the proposal. Retry with the current settings.');
+        }
+        if (!manual && !orchestratorSettings().enabled) return null;
+        // Manual launches or a changed concurrency setting can take a slot while the model responds.
+        if (await occupiedSlots(true) >= defaults(store).concurrency || atDailyLimit()) break;
+        if (closed || (!manual && !orchestratorSettings().enabled)) break;
+        if (store.get('orchestrator') !== JSON.stringify(settings)) throw new Error('Orchestrator settings changed while checking Jules capacity.');
+        const instructions = `${proposal.instructions}\n\nWork autonomously: do not ask the user questions or wait for clarification. Choose reasonable assumptions and accessible public sources. Document gaps and finish the report and pull request inside the assigned folder.`;
+        [project] = store.reserve([proposal.topic], instructions);
+        store.log('orchestrator_proposed', `Model proposed ${project.folder}`, project.id);
+        await launchResearchBatch([project.id]);
+        await schedule();
+        firstProject ??= project;
+        if (store.project(project.id)?.status !== 'running') break;
+      } while (!manual && settings.mode === 'continuous');
+      return firstProject ?? null;
+    } catch (error) {
+      if (project && store.project(project.id)?.status === 'reserved') store.removeReservation(project.id);
+      deferResearch(error);
+      store.log('orchestrator_error', error.message);
+      if (manual) throw error;
+      return null;
+    } finally { orchestratorBusy = false; }
+  }
+
+  function schedule() {
+    if (schedulerBusy) { schedulerRerunRequested = true; return schedulerPromise; }
+    if (closed || store.get('configured') !== '1' || coolingDown()) return Promise.resolve();
+    schedulerBusy = true;
+    schedulerPromise = (async () => {
+      try {
+        do {
+          schedulerRerunRequested = false;
+          let active = await occupiedSlots();
+          const limit = defaults(store).concurrency;
+          const queued = store.db.prepare("SELECT id FROM projects WHERE status='queued' ORDER BY folder_number").all();
+          for (const item of queued) {
+            if (closed || coolingDown() || active >= limit) break;
+            const project = store.project(item.id);
+            if (project.orchestrator_instructions && atDailyLimit()) continue;
+            await launchResearchProject(item.id);
+            if (store.project(item.id)?.status === 'running') active++;
+          }
+        } while (schedulerRerunRequested && !closed && !coolingDown());
+      } catch (error) {
+        deferResearch(error);
+      } finally {
+        schedulerBusy = false;
+      }
+    })();
+    return schedulerPromise;
   }
 
   async function autoReplyToFeedback(project, jules, activities) {
-    if (store.get('autoReply') === '0') return;
+    if (store.get('autoReply') === '0' && !continuous()) return;
     const prefix = `${project.jules_session_name}/activities/`;
     const messages = activities.filter(item => typeof item.name === 'string' && item.name.startsWith(prefix) && !item.name.slice(prefix.length).includes('/') && (item.agentMessaged?.agentMessage || item.userMessaged?.userMessage))
       .sort((a, b) => String(a.createTime ?? '').localeCompare(String(b.createTime ?? '')) || a.name.localeCompare(b.name));
     const question = messages.findLast(item => item.agentMessaged?.agentMessage);
     if (!question || messages.at(-1) !== question) return;
     const count = store.db.prepare("SELECT COUNT(*) AS n FROM jules_auto_replies WHERE project_id=? AND status IN ('sending','sent') AND activity_name IN (SELECT name FROM jules_activities WHERE project_id=? AND kind='message' AND originator='agent')").get(project.id, project.id).n;
-    if (count >= 3) return;
+    if (count >= 3 && !continuous()) return;
+    if (store.autoReplies(project.id).some(reply => reply.activity_name === question.name)) return;
+    let reply = autonomousReply;
+    let replyFrom = 'coordinator';
+    const orchestrator = orchestratorSettings();
+    if (orchestrator.brief && store.getSecret('orchestrator')) {
+      try {
+        reply = await draftJulesReply(modelClient(project.id), { brief: orchestrator.brief, topic: project.topic, instructions: project.orchestrator_instructions, question: question.agentMessaged.agentMessage });
+        replyFrom = 'model';
+      } catch (error) { store.log('orchestrator_reply_error', error.message, project.id); }
+    }
     const now = dateNow();
     const claimed = store.db.prepare("INSERT OR IGNORE INTO jules_auto_replies(activity_name,project_id,status,created_at,updated_at) VALUES (?,?,'sending',?,?)").run(question.name, project.id, now, now);
     if (claimed.changes !== 1) return;
     try {
-      await jules.sendMessage(project.jules_session_name, autonomousReply);
+      await jules.sendMessage(project.jules_session_name, reply);
       store.db.prepare("UPDATE jules_auto_replies SET status='sent',updated_at=? WHERE activity_name=?").run(dateNow(), question.name);
       store.log('auto_feedback_sent', `Answered a Jules question for ${project.folder} using the autonomous research policy`, project.id);
     } catch (error) {
@@ -178,13 +307,13 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
   }
 
   async function autoApprovePlan(project, jules, activities) {
-    if (store.get('autoReply') === '0') return;
+    if (store.get('autoReply') === '0' && !continuous()) return;
     const prefix = `${project.jules_session_name}/activities/`;
     const plan = activities.filter(item => typeof item.name === 'string' && item.name.startsWith(prefix) && item.planGenerated?.plan)
       .sort((a, b) => String(a.createTime ?? '').localeCompare(String(b.createTime ?? '')) || a.name.localeCompare(b.name)).at(-1);
     if (!plan) return;
     const count = store.db.prepare("SELECT COUNT(*) AS n FROM jules_auto_replies WHERE project_id=? AND status IN ('sending','sent') AND activity_name IN (SELECT name FROM jules_activities WHERE project_id=? AND kind='plan' AND summary='Plan generated')").get(project.id, project.id).n;
-    if (count >= 3) return;
+    if (count >= 3 && !continuous()) return;
     const now = dateNow();
     const claimed = store.db.prepare("INSERT OR IGNORE INTO jules_auto_replies(activity_name,project_id,status,created_at,updated_at) VALUES (?,?,'sending',?,?)").run(plan.name, project.id, now, now);
     if (claimed.changes !== 1) return;
@@ -214,7 +343,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
             saveActivities(store, project.id, project.jules_session_name, activities);
             store.db.prepare('UPDATE projects SET activity_error=NULL WHERE id=?').run(project.id);
             if (session.state === 'AWAITING_PLAN_APPROVAL') await autoApprovePlan(project, jules, activities);
-            if (session.state === 'AWAITING_USER_FEEDBACK') await autoReplyToFeedback(project, jules, activities);
+            if (['AWAITING_USER_FEEDBACK', 'PAUSED'].includes(session.state)) await autoReplyToFeedback(project, jules, activities);
           } catch (activityError) {
             store.db.prepare('UPDATE projects SET activity_error=? WHERE id=?').run(activityError.message, project.id);
             store.log('activity_poll_error', activityError.message, project.id);
@@ -265,16 +394,20 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
           } else store.log('pr_status_error', error.message, project.id);
         }
       }
-    } finally { pollingBusy = false; void schedule(); }
+    } finally {
+      pollingBusy = false;
+      if (!closed) { await schedule(); await runOrchestrator(); }
+    }
   }
 
   // An interrupted request may have reached Jules; never retry it blindly.
   store.db.prepare("UPDATE projects SET status='blocked',error='Launch was interrupted. Inspect Jules before retrying.',updated_at=? WHERE status='launching'").run(dateNow());
   store.db.prepare("UPDATE jules_auto_replies SET status='uncertain',error='Automatic response was interrupted. Inspect Jules before replying again.',updated_at=? WHERE status='sending'").run(dateNow());
-  const timer = setInterval(() => { void pollSessions(); void schedule(); }, 30000);
+  const timer = setInterval(() => { void pollSessions(); void schedule(); void runOrchestrator(); }, 30000);
   timer.unref();
   void schedule();
   void pollSessions();
+  void runOrchestrator();
 
   const server = createServer(async (request, response) => {
     const host = request.headers.host ?? '';
@@ -285,10 +418,18 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       const file = readFileSync(join(import.meta.dirname, '..', 'public', path.slice(1)));
       response.writeHead(200, { 'content-type': path.endsWith('.css') ? 'text/css; charset=utf-8' : 'image/svg+xml', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(file); return;
     }
+    const interfaceAssets = { '/interface.js': ['interface.js', 'text/javascript; charset=utf-8'], '/fonts/fraunces.ttf': ['fonts/fraunces.ttf', 'font/ttf'], '/fonts/fraunces-italic.ttf': ['fonts/fraunces-italic.ttf', 'font/ttf'], '/fonts/manrope.ttf': ['fonts/manrope.ttf', 'font/ttf'] };
+    if (request.method === 'GET' && Object.hasOwn(interfaceAssets, path)) {
+      const [file, contentType] = interfaceAssets[path];
+      response.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+      response.end(readFileSync(join(import.meta.dirname, '..', 'public', file)));
+      return;
+    }
     try {
       if (request.method === 'GET') {
+        if (path === '/welcome') return html(response, welcomePage({ configured: store.get('configured') === '1' && !!store.binding() }));
         if (path === '/') {
-          if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
+          if (store.get('configured') !== '1' || !store.binding()) return html(response, welcomePage());
           return html(response, dashboardPage({ binding: store.binding(), folders: store.remoteFolders(), projects: store.projects(), csrfToken, defaults: defaults(store), nextProjectNumber: store.nextProjectNumber(), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
         }
         if (path === '/setup') return setupView(response, { rebind: url.searchParams.has('rebind'), defaults: url.searchParams.has('defaults'), error: url.searchParams.get('error') });
@@ -298,6 +439,10 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
           return html(response, settingsPage({ binding: store.binding(), folders: store.remoteFolders(), projects: store.projects(), csrfToken, defaults: defaults(store), nextProjectNumber: store.nextProjectNumber(), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
         }
         if (path === '/prompt') return html(response, promptPage({ template: syncActivePrompt(store, promptPath), library: promptLibrary(store), csrfToken, configured: store.get('configured') === '1', back: store.get('configured') === '1' ? '/settings' : '/setup?defaults=1', message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
+        if (path === '/orchestrator') {
+          if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
+          return html(response, orchestratorPage({ settings: orchestratorSettings(), hasKey: !!store.getSecret('orchestrator'), csrfToken, message: url.searchParams.get('message'), error: url.searchParams.get('error'), lastError: store.get('orchestratorLastError'), lastAttempt: store.get('orchestratorLastAttempt'), retryAt: store.get('orchestratorRetryAt'), usedToday: orchestratorUsage(), concurrency: defaults(store).concurrency }));
+        }
         if (path === '/activity') {
           if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
           const projects = store.projects();
@@ -333,6 +478,30 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       if (request.method !== 'POST') { response.writeHead(405); response.end(); return; }
       const form = await bodyParams(request);
       if (!safeEqual(form.get('csrf'), csrfToken)) { response.writeHead(403); response.end('Invalid form token'); return; }
+      if (path === '/orchestrator/settings') {
+        if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
+        const previous = orchestratorSettings();
+        const settings = validateOrchestratorSettings({ provider: form.get('provider'), endpoint: form.get('endpoint') || NVIDIA_ENDPOINT, model: form.get('model') || NVIDIA_MODEL, brief: form.get('brief'), intervalHours: form.get('intervalHours'), dailyLimit: form.get('dailyLimit'), mode: form.get('mode') || 'scheduled' });
+        const key = form.get('apiKey')?.trim();
+        if (!key && (!store.getSecret('orchestrator') || previous.provider !== settings.provider || previous.endpoint !== settings.endpoint)) throw new Error('Enter an API key for this provider and endpoint.');
+        if (key) store.setSecret('orchestrator', key);
+        settings.enabled = form.has('enabled');
+        store.set('orchestrator', JSON.stringify(settings));
+        resetCooldown();
+        store.log('orchestrator_settings_updated', `${settings.provider} orchestrator ${settings.enabled ? 'enabled' : 'disabled'}`);
+        if (settings.enabled) void runOrchestrator();
+        return redirect(response, messageUrl('/orchestrator', 'Orchestrator settings saved.'));
+      }
+      if (path === '/orchestrator/generate') {
+        if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
+        const project = await runOrchestrator(true);
+        if (!project) {
+          if (coolingDown()) throw new Error(`Research is paused until ${store.get('orchestratorRetryAt')}. ${store.get('orchestratorLastError') || 'A provider retry is pending.'}`);
+          if (!store.getSecret('orchestrator') || !orchestratorSettings().brief) throw new Error('Save a model API key and research brief before creating a task.');
+          throw new Error(`No Jules slot is available within the current capacity target of ${defaults(store).concurrency}. Check running agents or increase the target under Agent settings.`);
+        }
+        return redirect(response, messageUrl(`/projects/${project.id}`, 'Research task created and queued.'));
+      }
       if (path === '/prompt') {
         try {
           if (form.get('action') === 'save-as') {
@@ -357,6 +526,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
         if (!key) throw new Error('Enter a Jules API key.');
         const sources = await discoverSources(key, { jules: julesFactory(key) });
         store.setSecret('jules', key);
+        resetCooldown();
         store.log('jules_connected', `Jules authenticated; ${sources.length} repositories discovered`);
         return redirect(response, sources.length ? '/setup' : messageUrl('/setup', 'Authentication succeeded, but no repositories are accessible. Connect one in Jules and retry.', 'error'));
       }
@@ -376,7 +546,10 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
           store.setSecret('github', token);
           store.saveBinding(result);
           store.replaceRemoteFolders(result.folders);
+          resetCooldown();
+          store.set('orchestratorLastAttempt', '');
           store.log('binding_created', `Bound ${result.fullName} on ${result.branch} to ${result.sourceName}`);
+          if (form.has('rebind') && store.get('configured') === '1') void runOrchestrator();
           return redirect(response, form.has('rebind') && store.get('configured') === '1' ? messageUrl('/settings', 'Repository connection verified and updated.') : '/setup');
         } catch (error) {
           return setupView(response, { error: error.message, branches: error.details?.branches, prefill, rebind: form.has('rebind') });
@@ -386,6 +559,7 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
         if (!store.binding()) throw new Error('Connect a repository first.');
         saveDefaults(store, parseDefaults(form)); store.set('configured', '1');
         store.log('setup_completed', 'Setup completed');
+        void runOrchestrator();
         return redirect(response, messageUrl('/', 'Setup complete. The repository is ready.'));
       }
       if (path === '/activity/settings') {
@@ -394,11 +568,26 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
         if (form.has('autoReplyPresent')) store.set('autoReply', form.has('autoReply') ? '1' : '0');
         store.log('agent_settings_updated', 'Agent runtime, seeds, and concurrency updated');
         void schedule();
+        void runOrchestrator();
         return redirect(response, messageUrl('/activity/settings', 'Agent settings saved. Queued tasks will use the new limit.'));
       }
       if (path === '/settings/refresh') {
         await refresh();
         return redirect(response, messageUrl('/settings', 'Jules, GitHub, branch and numbered folders verified.'));
+      }
+      if (path === '/settings/jules') {
+        if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
+        const key = form.get('julesKey')?.trim();
+        if (!key) throw new Error('Enter a Jules API key.');
+        // Check the existing repository with the replacement key before saving it.
+        const binding = store.binding();
+        await verifyRepository({ julesKey: key, githubToken: githubToken(), owner: binding.github_owner, repo: binding.github_repo, branch: binding.base_branch, sourceName: binding.jules_source_id, expectedGithubId: binding.github_repository_id }, { jules: julesFactory(key), github: githubFactory(githubToken()) });
+        store.setSecret('jules', key);
+        resetCooldown();
+        store.log('jules_key_updated', 'Verified and updated the Jules API key');
+        void schedule();
+        void runOrchestrator();
+        return redirect(response, messageUrl('/settings', 'Jules key verified and updated. Automatic research can resume.'));
       }
       if (path === '/settings/test') {
         await verifyBinding(store, deps());
@@ -496,9 +685,9 @@ export function createApp(store, { julesFactory = julesClient, githubFactory = g
       }
       return html(response, layout('Not found', '<main class="narrow"><h1>Page not found</h1></main>'), 404);
     } catch (error) {
-      const destination = path.startsWith('/setup') ? '/setup' : path.startsWith('/settings') ? '/settings' : path === '/activity/settings' ? '/activity/settings' : '/';
+      const destination = path.startsWith('/setup') ? '/setup' : path.startsWith('/settings') ? '/settings' : path.startsWith('/orchestrator') ? '/orchestrator' : path === '/activity/settings' ? '/activity/settings' : '/';
       redirect(response, messageUrl(destination, error.message, 'error'));
     }
   });
-  return { server, close: () => { clearInterval(timer); server.close(); }, launchResearchProject, launchResearchBatch, pollSessions, schedule };
+  return { server, close: () => { closed = true; clearInterval(timer); server.close(); }, launchResearchProject, launchResearchBatch, pollSessions, schedule, runOrchestrator };
 }

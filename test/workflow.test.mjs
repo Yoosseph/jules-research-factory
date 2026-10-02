@@ -200,7 +200,7 @@ test('setup, reserve, preflight, launch and PR validation use one verified desti
     assert.equal(store.get('finalSeeds'), '7');
     assert.match(await (await get('/activity')).text(), /Concurrency limit<\/span><strong>2/);
     assert.match(await (await get('/activity/settings')).text(), /name="concurrency"[^>]*value="2"/);
-    const invalidSettings = await post('/activity/settings', { csrf: token, runtime: '60–120', developmentSeeds: 3, finalSeeds: 7, concurrency: 51 });
+    const invalidSettings = await post('/activity/settings', { csrf: token, runtime: '60–120', developmentSeeds: 3, finalSeeds: 7, concurrency: 61 });
     assert.equal(invalidSettings.status, 303);
     assert.match(invalidSettings.headers.get('location'), /\/activity\/settings\?error=/);
     assert.equal(store.get('concurrency'), '2');
