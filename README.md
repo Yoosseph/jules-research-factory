@@ -2,6 +2,8 @@
 
 **Give it a research direction. Build a library of reports with sources.**
 
+![Live research messages flowing between NVIDIA and Jules agents](assets/live-flow-demo.gif)
+
 [![License: AGPLv3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
 [![Tests](https://github.com/Yoosseph/jules-research-factory/actions/workflows/ci.yml/badge.svg)](https://github.com/Yoosseph/jules-research-factory/actions/workflows/ci.yml)
 
@@ -10,12 +12,6 @@ Research Facility is an open-source app that helps you run ongoing research from
 The agents produce reports in your chosen GitHub repository. When a task finishes, the app checks for an available slot and can start the next assignment. You can follow the work and read the agents' conversations in your browser.
 
 You do not need to write code to use the app. Setup involves installing Node.js, running two commands, and connecting your accounts.
-
-## Live flow preview
-
-![Live research messages flowing between NVIDIA and Jules agents](assets/live-flow-demo.gif)
-
-Follow messages through the research network and open any packet to read its contents.
 
 ## Why use it?
 
