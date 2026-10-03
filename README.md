@@ -11,6 +11,12 @@ The agents produce reports in your chosen GitHub repository. When a task finishe
 
 You do not need to write code to use the app. Setup involves installing Node.js, running two commands, and connecting your accounts.
 
+## Live flow preview
+
+![Live research messages flowing between NVIDIA and Jules agents](assets/live-flow-demo.gif)
+
+Follow messages through the research network and open any packet to read its contents.
+
 ## Why use it?
 
 Research often starts with a broad question and turns into dozens of smaller ones. Research Facility helps you explore those questions in parallel and keep the results together, instead of repeatedly starting new AI chats and copying their answers into documents.
