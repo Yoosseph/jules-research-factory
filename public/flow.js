@@ -98,7 +98,7 @@ class FlowTraffic {
       group.setAttribute('data-moving-id', item.packet.id);
       group.setAttribute('role', 'button'); group.setAttribute('tabindex', '0'); group.setAttribute('aria-controls', 'packet-peek');
       group.setAttribute('aria-label', `Open ${kindLabel(item.packet).toLowerCase()}: ${item.packet.title}, ${names[item.packet.from]} to ${names[item.packet.to]}`);
-      const hit = svgNode('ellipse'); hit.setAttribute('class', 'flow-packet-hit'); group.append(hit);
+      const hit = svgNode('ellipse'); hit.setAttribute('class', 'flow-packet-hit'); hit.setAttribute('fill', 'transparent'); group.append(hit);
       const dots = [6, 4, 3, 2].map((radius, index) => {
         const dot = svgNode('circle'); dot.setAttribute('r', String(radius)); dot.setAttribute('class', index ? 'flow-packet-tail' : 'flow-packet'); dot.setAttribute('opacity', String(1 - index * .23)); group.append(dot); return dot;
       });
