@@ -39,7 +39,18 @@ export function flowSnapshot(store, { modelBusy = false, projectId = null } = {}
   packets.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   const secrets = ['jules', 'github', 'orchestrator'].map(name => store.getSecret(name)).filter(Boolean);
   const redact = value => secrets.reduce((safe, secret) => safe.replaceAll(secret, '[redacted]'), String(value ?? ''));
-  for (const packet of packets) { packet.content = redact(packet.content); packet.title = redact(packet.title); }
+  const byProject = new Map(projects.map(project => [project.id, project]));
+  for (const packet of packets) {
+    packet.content = redact(packet.content); packet.title = redact(packet.title);
+    const project = byProject.get(packet.projectId);
+    if (['report', 'completed'].includes(packet.kind) && ['open', 'merged', 'closed'].includes(project?.pr_status)) {
+      try {
+        const url = new URL(project.pr_url);
+        const match = url.pathname.match(/^\/([^/]+\/[^/]+)\/pull\/(\d+)\/?$/);
+        if (url.protocol === 'https:' && url.hostname === 'github.com' && !url.username && !url.password && match?.[1].toLowerCase() === project.repository_full_name.toLowerCase()) packet.productUrl = `https://github.com/${match[1]}/pull/${match[2]}`;
+      } catch { /* A malformed saved destination must not become a clickable artifact. */ }
+    }
+  }
   const retryAt = store.get('orchestratorRetryAt') || null;
   const error = store.get('orchestratorLastError') || null;
   return {

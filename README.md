@@ -2,6 +2,8 @@
 
 **Give it a research direction. Build a library of reports with sources.**
 
+![Live research messages flowing between NVIDIA and Jules agents](assets/live-flow-demo.gif)
+
 [![License: AGPLv3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
 [![Tests](https://github.com/Yoosseph/jules-research-factory/actions/workflows/ci.yml/badge.svg)](https://github.com/Yoosseph/jules-research-factory/actions/workflows/ci.yml)
 
@@ -104,7 +106,7 @@ For an account with 15 simultaneous tasks, set **Agents → Agent settings → C
 
 ### 5. Follow the work and read the reports
 
-- **Live flow:** inspect the communication map and recorded conversations. Pause the view to read without stopping research.
+- **Live flow:** watch glowing dots carry messages across the communication map. Select a dot or message card to open a compact panel showing its contents, sender, recipient, and message type. Choose **Expand message** for a larger reader. Completed-report packets link to the report in GitHub. Use **Replay recent** to follow recorded exchanges again, or pause the view without stopping research.
 - **Agents:** see the state of each task and open its activity timeline.
 - **Projects:** find assignments and their proposed reports on GitHub.
 - **Prompt:** change the instructions used for future reports.
