@@ -66,6 +66,8 @@ class FlowTraffic {
   const connection = find('[data-flow-connection]');
   const pauseButton = find('[data-flow-pause]');
   const chat = find('[data-flow-chat]');
+  const peek = find('[data-packet-peek]'), dialog = find('[data-packet-dialog]');
+  let inspectedPacket, returnFocus;
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
   let animate = !motion.matches;
   let agentSignature = '', chatSignature = '', mapSignature = null, conversationPackets = [];
@@ -74,12 +76,13 @@ class FlowTraffic {
   const svgNode = tag => document.createElementNS('http://www.w3.org/2000/svg', tag);
   const overlay = svgNode('svg');
   overlay.setAttribute('viewBox', svg.getAttribute('viewBox')); overlay.setAttribute('preserveAspectRatio', 'none');
-  overlay.setAttribute('aria-hidden', 'true'); overlay.setAttribute('class', 'flow-wires flow-traffic-layer'); stage.append(overlay);
+  overlay.setAttribute('role', 'group'); overlay.setAttribute('aria-label', 'Message packets'); overlay.setAttribute('class', 'flow-wires flow-traffic-layer'); stage.append(overlay);
   const replayButton = find('[data-flow-replay]');
   const motionButton = find('[data-flow-motion]');
   const eligible = packet => (!project || packet.projectId === project) && (!filterNode || packet.from === filterNode || packet.to === filterNode);
   const shortTitle = packet => ({ dispatch: 'Task plan', request: 'Model request', response: 'Response', reply: 'Message', approval: 'Approval', plan: 'Plan', progress: 'Research update', state: 'Status', history: 'Saved task', report: 'Report ready', error: 'Error', failed: 'Failed', completed: 'Complete' })[packet.kind] || 'Update';
   const failed = packet => ['error', 'failed'].includes(packet.kind);
+  const kindLabel = packet => /review/i.test(packet.title) ? 'Review' : ({ message:'Message', dispatch:'Task plan', request:'Request', response:'Response', reply:'Response', approval:'Approval', plan:'Task plan', progress:'Research update', state:'Status', history:'Task instructions', report:'Completed report', error:'Error', failed:'Error', completed:'Completed task', command:'Command output', change:'Changes' })[packet.kind] || 'Update';
 
   function showTransfer({ packet, replay }) {
     find('[data-transfer-label]').textContent = `${replay ? 'Replay' : 'Live'} · ${names[packet.from]} to ${names[packet.to]}: ${packet.title}`;
@@ -93,13 +96,19 @@ class FlowTraffic {
       if (!path) return null;
       const group = svgNode('g'); group.setAttribute('class', `flow-moving-packet packet-from-${item.packet.from}${failed(item.packet) ? ' packet-error' : ''}${item.packet.kind === 'report' ? ' packet-report' : ''}`);
       group.setAttribute('data-moving-id', item.packet.id);
+      group.setAttribute('role', 'button'); group.setAttribute('tabindex', '0'); group.setAttribute('aria-controls', 'packet-peek');
+      group.setAttribute('aria-label', `Open ${kindLabel(item.packet).toLowerCase()}: ${item.packet.title}, ${names[item.packet.from]} to ${names[item.packet.to]}`);
+      const hit = svgNode('ellipse'); hit.setAttribute('class', 'flow-packet-hit'); group.append(hit);
       const dots = [6, 4, 3, 2].map((radius, index) => {
         const dot = svgNode('circle'); dot.setAttribute('r', String(radius)); dot.setAttribute('class', index ? 'flow-packet-tail' : 'flow-packet'); dot.setAttribute('opacity', String(1 - index * .23)); group.append(dot); return dot;
       });
       const label = svgNode('text'); label.setAttribute('class', 'flow-packet-caption'); label.textContent = `${item.replay ? 'Replay · ' : ''}${shortTitle(item.packet)}`; group.append(label);
-      group.addEventListener('click', () => inspect(item.packet)); overlay.append(group);
+      group.addEventListener('click', () => inspect(item.packet, { trigger: group }));
+      group.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); inspect(item.packet, { trigger: group }); } });
+      overlay.append(group);
       const length = path.getTotalLength(), bounds = overlay.getBoundingClientRect();
       const view = svg.viewBox.baseVal;
+      hit.setAttribute('rx', String(Math.max(18, 22 * view.width / bounds.width))); hit.setAttribute('ry', String(Math.max(18, 22 * view.height / bounds.height)));
       const inside = (distance, actor) => {
         const button = find(`[data-node="${actor}"]`); if (!button) return false;
         const box = button.getBoundingClientRect(), point = path.getPointAtLength(distance);
@@ -109,14 +118,14 @@ class FlowTraffic {
       let begin = 0, end = length;
       while (begin < length / 2 && inside(begin, item.packet.from)) begin += 4;
       while (end > begin && inside(end, item.packet.to)) end -= 4;
-      return { group, dots, label, path, begin, distance: Math.max(0, end - begin) };
+      return { group, dots, hit, label, path, begin, distance: Math.max(0, end - begin) };
     },
     frame(item, progress) {
-      const { dots, label, path, begin, distance } = item.visual;
+      const { dots, hit, label, path, begin, distance } = item.visual;
       dots.forEach((dot, index) => {
         const point = path.getPointAtLength(begin + distance * (animate ? Math.max(0, progress - index * .045) : .5));
         dot.setAttribute('cx', point.x); dot.setAttribute('cy', point.y);
-        if (!index) { label.setAttribute('x', point.x); label.setAttribute('y', point.y - 16); }
+        if (!index) { hit.setAttribute('cx', point.x); hit.setAttribute('cy', point.y); label.setAttribute('x', point.x); label.setAttribute('y', point.y - 16); }
       });
       item.visual.group.setAttribute('data-progress', String(progress));
     },
@@ -139,16 +148,40 @@ class FlowTraffic {
   });
   traffic.freeze('hidden', document.hidden);
 
-  function inspect(packet) {
+  function inspect(packet, { open = true, trigger = document.activeElement } = {}) {
+    inspectedPacket = packet;
     selected = packet.id;
-    find('[data-packet-title]').textContent = packet.title;
-    find('[data-packet-route]').textContent = `${names[packet.from]} to ${names[packet.to]} · ${stamp(packet.createdAt)}`;
-    find('[data-packet-content]').textContent = packet.content || 'No additional text was returned for this event.';
-    const link = find('[data-packet-project]');
-    link.hidden = !packet.projectId;
-    if (packet.projectId) link.href = `/projects/${encodeURIComponent(packet.projectId)}`;
-    chat.querySelectorAll('[data-message-id]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.messageId === selected)));
+    for (const title of root.querySelectorAll('[data-packet-title]')) title.textContent = packet.title;
+    for (const kind of root.querySelectorAll('[data-packet-kind]')) kind.textContent = kindLabel(packet);
+    for (const route of root.querySelectorAll('[data-packet-route]')) route.textContent = `${names[packet.from]} to ${names[packet.to]} · ${stamp(packet.createdAt)}`;
+    for (const content of root.querySelectorAll('[data-packet-content]')) { content.textContent = packet.content || 'No additional text was returned for this event.'; content.scrollTop = 0; }
+    for (const link of root.querySelectorAll('[data-packet-project]')) {
+      link.hidden = !packet.projectId;
+      if (packet.projectId) link.href = `/projects/${encodeURIComponent(packet.projectId)}`;
+      else link.removeAttribute('href');
+    }
+    let product = '';
+    try { const url = new URL(packet.productUrl); if (url.protocol === 'https:' && url.hostname === 'github.com' && !url.username && !url.password && /^\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(url.pathname)) product = url.href; } catch { /* Only validated report destinations are links. */ }
+    for (const link of root.querySelectorAll('[data-packet-product]')) { link.hidden = !product; if (product) link.href = product; else link.removeAttribute('href'); }
+    root.querySelectorAll('[data-packet-expand]').forEach(button => { button.disabled = false; });
+    root.querySelectorAll('[data-message-id],[data-map-message-id]').forEach(button => button.setAttribute('aria-pressed', String((button.dataset.messageId || button.dataset.mapMessageId) === selected)));
+    if (open && peek) { returnFocus = trigger; peek.hidden = false; if (!dialog?.open) find('[data-packet-peek-close]').focus({ preventScroll: true }); }
   }
+
+  const restoreFocus = () => (returnFocus?.isConnected ? returnFocus : replayButton)?.focus({ preventScroll: true });
+  find('[data-packet-peek-close]')?.addEventListener('click', () => { peek.hidden = true; restoreFocus(); });
+  root.querySelectorAll('[data-packet-expand]').forEach(button => button.addEventListener('click', () => {
+    if (!dialog || !inspectedPacket) return;
+    if (peek.hidden) returnFocus = button;
+    peek.hidden = true; dialog.showModal();
+  }));
+  find('[data-packet-dialog-close]')?.addEventListener('click', () => dialog.close());
+  find('[data-packet-collapse]')?.addEventListener('click', () => { dialog.close('compact'); });
+  dialog?.addEventListener('close', () => {
+    if (dialog.returnValue === 'compact') { dialog.returnValue = ''; peek.hidden = false; find('[data-packet-expand]').focus({ preventScroll: true }); }
+    else restoreFocus();
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && peek && !peek.hidden && !dialog?.open) { peek.hidden = true; restoreFocus(); } });
 
   function render(data) {
     conversationPackets = data.packets;
@@ -217,7 +250,7 @@ class FlowTraffic {
       }
       if (!packets.length) chat.append(node('p', 'help', 'No recorded messages for this selection yet.'));
       chat.scrollTop = scrollTop;
-      if (!selected && packets.length) inspect(packets.find(packet => packet.content) || packets[0]);
+      if (!selected && packets.length && (!peek || peek.hidden) && !dialog?.open) inspect(packets.find(packet => packet.content) || packets[0], { open: false });
     }
   }
 

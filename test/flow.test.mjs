@@ -53,6 +53,9 @@ test('flow stream publishes new packets and closes cleanly; theme and notice con
     assert.match(page, /data-flow-replay/);
     assert.match(page, /data-map-messages/);
     assert.match(page, /data-flow-motion/);
+    assert.match(page, /data-packet-peek hidden role="region"/);
+    assert.match(page, /<dialog[^>]*data-packet-dialog[^>]*aria-labelledby="packet-expanded-title"/);
+    assert.match(page, /data-packet-expand/);
     for (const asset of ['/flow.js', '/theme.js', '/favicon-dark.svg']) assert.equal((await fetch(base + asset)).status, 200);
     const response = await fetch(base + '/api/flow/stream', { signal: controller.signal });
     assert.match(response.headers.get('content-type'), /text\/event-stream/);
@@ -79,4 +82,26 @@ test('flow stream publishes new packets and closes cleanly; theme and notice con
     app.close(); store.db.close();
     if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('completed packets link only to the validated project report destination', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'research-products-'));
+  const store = openStore(directory);
+  try {
+    initializeFlow(store);
+    store.saveBinding({ owner: 'owner', repo: 'repo', fullName: 'owner/repo', githubId: '1', branch: 'main', sourceName: 'sources/repo' });
+    const [project] = store.reserve(['Market report']);
+    recordPacket(store, { projectId: project.id, from: 'jules', to: 'repository', kind: 'report', title: 'Report ready', content: 'Report submitted.' });
+    recordPacket(store, { projectId: project.id, kind: 'response', title: 'Response', content: 'A response is not a deliverable.' });
+    const save = (url, status = 'open') => store.db.prepare('UPDATE projects SET pr_url=?,pr_status=? WHERE id=?').run(url, status, project.id);
+    save('https://github.com/owner/repo/pull/42?tracking=ignored');
+    let packets = flowSnapshot(store).packets;
+    assert.equal(packets.find(p => p.kind === 'report').productUrl, 'https://github.com/owner/repo/pull/42');
+    assert.equal(packets.find(p => p.kind === 'response').productUrl, undefined);
+    for (const url of ['javascript:alert(1)', 'https://evil.example/owner/repo/pull/42', 'https://github.com/other/repo/pull/42', 'https://password@github.com/owner/repo/pull/42']) {
+      save(url); assert.equal(flowSnapshot(store).packets.find(p => p.kind === 'report').productUrl, undefined);
+    }
+    save('https://github.com/owner/repo/pull/42', null);
+    assert.equal(flowSnapshot(store).packets.find(p => p.kind === 'report').productUrl, undefined);
+  } finally { store.db.close(); if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true }); }
 });

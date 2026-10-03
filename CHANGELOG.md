@@ -4,6 +4,7 @@ Notable project changes are recorded here. Tagged releases will follow [Semantic
 
 ## Unreleased
 
+- Added compact packet pop-outs with expandable readers, message types and routes, keyboard access, larger click targets, and links to completed reports.
 - Made packet transfers visible for longer with concurrent glowing trails, moving labels, recent-message replay, and message previews directly on the network diagram.
 - Fixed packet pause/resume timing, added motion controls, and retained every transfer in a burst instead of dropping queued events.
 
