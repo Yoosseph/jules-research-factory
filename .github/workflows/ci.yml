@@ -13,7 +13,6 @@ permissions:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     concurrency:
