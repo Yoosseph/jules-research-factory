@@ -4,6 +4,9 @@ Notable project changes are recorded here. Tagged releases will follow [Semantic
 
 ## Unreleased
 
+- Expanded CI to macOS and the minimum Node.js version, added JavaScript syntax checks, and pinned workflow actions to verified commits.
+- Added tested ZIP and tar release downloads with SHA-256 checksums, private-file exclusion, and a documented maintainer release process.
+
 - Isolated live-flow tests from real providers and drained their pending work before closing the database, fixing intermittent Windows CI failures.
 - Added compact packet pop-outs with expandable readers, message types and routes, keyboard access, larger click targets, and links to completed reports.
 - Made packet transfers visible for longer with concurrent glowing trails, moving labels, recent-message replay, and message previews directly on the network diagram.
