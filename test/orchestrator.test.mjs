@@ -1,10 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { openStore } from '../src/db.mjs';
 import { createApp } from '../src/app.mjs';
+import { closeApp, listen, storeFixture, writePromptFixture } from './support/fixtures.mjs';
 import { NVIDIA_ENDPOINT, NVIDIA_MODEL, validateOrchestratorSettings, orchestratorClient, proposeResearch, draftJulesReply } from '../src/orchestrator.mjs';
 import { ProviderError } from '../src/providers.mjs';
 
@@ -31,10 +28,8 @@ test('provider settings and structured responses reject invalid data', async () 
 });
 
 async function continuousFixture(run) {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-continuous-'));
-  const store = openStore(directory);
-  const promptPath = join(directory, 'prompt.txt');
-  writeFileSync(promptPath, readFileSync(new URL('../prompt-template.txt', import.meta.url)));
+  const { directory, store, cleanup } = storeFixture('researchforge-continuous-');
+  const promptPath = writePromptFixture(directory);
   store.setSecret('jules', 'jules-key');
   store.setSecret('github', 'github-token');
   store.setSecret('orchestrator', 'model-key');
@@ -78,9 +73,8 @@ async function continuousFixture(run) {
     settings.enabled = false;
     store.set('orchestrator', JSON.stringify(settings));
     await app.schedule();
-    app.close();
-    store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    await closeApp(app);
+    cleanup();
   }
 }
 
@@ -94,8 +88,7 @@ test('repository rebind clears the previous destination retry only after success
     store.set('orchestratorLastError', 'Could not locate owner/old-repo in Jules.');
     store.set('orchestratorFailures', 5);
     store.set('orchestratorLastAttempt', new Date().toISOString());
-    await new Promise(done => app.server.listen(0, '127.0.0.1', done));
-    const base = `http://127.0.0.1:${app.server.address().port}`;
+    const base = await listen(app);
     const csrf = (await (await fetch(base + '/settings')).text()).match(/name="csrf" value="([^"]+)"/)[1];
     const post = values => fetch(base + '/setup/repository', { method: 'POST', redirect: 'manual', body: new URLSearchParams({ csrf, rebind: '1', branch: 'main', ...values }) });
     await post({ owner: 'owner', repo: 'missing' });
@@ -240,8 +233,7 @@ test('connection page verifies a replacement Jules key before saving and clears 
   await continuousFixture(async ({ app, store, jules, settings }) => {
     settings.enabled = false;
     store.set('orchestrator', JSON.stringify(settings));
-    await new Promise(done => app.server.listen(0, '127.0.0.1', done));
-    const base = `http://127.0.0.1:${app.server.address().port}`;
+    const base = await listen(app);
     const page = await (await fetch(base + '/settings')).text();
     assert.match(page, /Update Jules key/);
     const csrf = page.match(/name="csrf" value="([^"]+)"/)[1];
@@ -314,10 +306,8 @@ test('disabling continuous research while the model responds prevents a launch',
 });
 
 test('orchestrator settings create a checked Jules task and answer its question', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-orchestrator-'));
-  const store = openStore(directory);
-  const promptPath = join(directory, 'prompt.txt');
-  writeFileSync(promptPath, readFileSync(new URL('../prompt-template.txt', import.meta.url)));
+  const { directory, store, cleanup } = storeFixture('researchforge-orchestrator-');
+  const promptPath = writePromptFixture(directory);
   store.setSecret('jules', 'jules-key');
   store.setSecret('github', 'github-token');
   store.saveBinding({ owner: 'owner', repo: 'repo', fullName: 'owner/repo', githubId: '7', branch: 'main', sourceName: 'sources/repo' });
@@ -341,8 +331,7 @@ test('orchestrator settings create a checked Jules task and answer its question'
     if (system.includes('plan one research task')) return modelCalls.length === 1 ? { topic: 'Calibration study', instructions: 'Compare public calibration methods and cite sources.' } : { topic: 'Coverage study', instructions: 'Survey coverage measures and cite sources.' };
     return { reply: 'Compare against a simple published baseline and explain why.' };
   } });
-  await new Promise(done => app.server.listen(0, '127.0.0.1', done));
-  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const base = await listen(app);
   const get = path => fetch(base + path);
   try {
     const page = await (await get('/orchestrator')).text();
@@ -378,8 +367,7 @@ test('orchestrator settings create a checked Jules task and answer its question'
     assert.equal(store.projects()[0].topic, 'Coverage study');
     assert.equal(store.get('orchestratorCount'), '2');
   } finally {
-    app.close();
-    store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    await closeApp(app);
+    cleanup();
   }
 });

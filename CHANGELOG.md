@@ -4,6 +4,9 @@ Notable project changes are recorded here. Tagged releases will follow [Semantic
 
 ## Unreleased
 
+- Reorganized the app into focused browser-request, research-coordination, live-message, page-rendering, and saved-data modules; removed repeated helpers and unused styles while preserving existing workflows.
+- Preserved saved research instructions when upgrading older databases, and added checks for migration recovery, provider paging, local access, and form protection.
+
 - Expanded CI to macOS and the minimum Node.js version, added JavaScript syntax checks, and pinned workflow actions to verified commits.
 - Added tested ZIP and tar release downloads with SHA-256 checksums, private-file exclusion, and a documented maintainer release process.
 

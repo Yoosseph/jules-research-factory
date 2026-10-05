@@ -1,17 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { openStore } from '../src/db.mjs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createApp } from '../src/app.mjs';
+import { closeApp, listen, storeFixture, writePromptFixture } from './support/fixtures.mjs';
 
 test('setup, reserve, preflight, launch and PR validation use one verified destination', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-workflow-'));
-  const store = openStore(directory);
+  const { directory, store, cleanup } = storeFixture('researchforge-workflow-');
   const calls = [];
-  const promptPath = join(directory, 'prompt-template.txt');
-  writeFileSync(promptPath, readFileSync(new URL('../prompt-template.txt', import.meta.url)));
+  const promptPath = writePromptFixture(directory);
   let sessionPolls = 0;
   let forcedSessionState = null;
   let autoQuestion = false;
@@ -42,8 +38,7 @@ test('setup, reserve, preflight, launch and PR validation use one verified desti
     pullFiles: async () => [{ filename: '5-Uncertainty-Estimation/README.md' }]
   };
   const app = createApp(store, { julesFactory: () => jules, githubFactory: () => github, promptPath });
-  await new Promise(resolveReady => app.server.listen(0, '127.0.0.1', resolveReady));
-  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const base = await listen(app);
   const get = path => fetch(`${base}${path}`, { redirect: 'manual' });
   const post = (path, values) => fetch(`${base}${path}`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', origin: base }, body: new URLSearchParams(values) });
   try {
@@ -228,8 +223,7 @@ test('setup, reserve, preflight, launch and PR validation use one verified desti
     await app.pollSessions();
     assert.equal(store.project(changed.id).status, 'pr_rejected');
   } finally {
-    await new Promise(resolveClose => app.server.close(resolveClose));
-    store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    await closeApp(app);
+    cleanup();
   }
 });

@@ -80,9 +80,11 @@ class FlowTraffic {
   const replayButton = find('[data-flow-replay]');
   const motionButton = find('[data-flow-motion]');
   const eligible = packet => (!project || packet.projectId === project) && (!filterNode || packet.from === filterNode || packet.to === filterNode);
-  const shortTitle = packet => ({ dispatch: 'Task plan', request: 'Model request', response: 'Response', reply: 'Message', approval: 'Approval', plan: 'Plan', progress: 'Research update', state: 'Status', history: 'Saved task', report: 'Report ready', error: 'Error', failed: 'Failed', completed: 'Complete' })[packet.kind] || 'Update';
+  const shortTitles = { dispatch: 'Task plan', request: 'Model request', response: 'Response', reply: 'Message', approval: 'Approval', plan: 'Plan', progress: 'Research update', state: 'Status', history: 'Saved task', report: 'Report ready', error: 'Error', failed: 'Failed', completed: 'Complete' };
+  const shortTitle = packet => shortTitles[packet.kind] || 'Update';
   const failed = packet => ['error', 'failed'].includes(packet.kind);
-  const kindLabel = packet => /review/i.test(packet.title) ? 'Review' : ({ message:'Message', dispatch:'Task plan', request:'Request', response:'Response', reply:'Response', approval:'Approval', plan:'Task plan', progress:'Research update', state:'Status', history:'Task instructions', report:'Completed report', error:'Error', failed:'Error', completed:'Completed task', command:'Command output', change:'Changes' })[packet.kind] || 'Update';
+  const kindLabels = { message: 'Message', dispatch: 'Task plan', request: 'Request', response: 'Response', reply: 'Response', approval: 'Approval', plan: 'Task plan', progress: 'Research update', state: 'Status', history: 'Task instructions', report: 'Completed report', error: 'Error', failed: 'Error', completed: 'Completed task', command: 'Command output', change: 'Changes' };
+  const kindLabel = packet => /review/i.test(packet.title) ? 'Review' : kindLabels[packet.kind] || 'Update';
 
   function showTransfer({ packet, replay }) {
     find('[data-transfer-label]').textContent = `${replay ? 'Replay' : 'Live'} · ${names[packet.from]} to ${names[packet.to]}: ${packet.title}`;
@@ -183,6 +185,57 @@ class FlowTraffic {
   });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && peek && !peek.hidden && !dialog?.open) { peek.hidden = true; restoreFocus(); } });
 
+  function renderAgents(projects) {
+    const agentsKey = JSON.stringify(projects);
+    if (agentsKey !== agentSignature) {
+      agentSignature = agentsKey;
+      const agents = find('[data-flow-agents]'); agents.replaceChildren();
+      const options = [node('option', '', 'All agents')]; options[0].value = '';
+      for (const agent of projects) {
+        const option = node('option', '', agent.folder); option.value = agent.id; options.push(option);
+        const button = node('button', 'flow-agent'); button.type = 'button'; button.dataset.agentId = agent.id;
+        button.setAttribute('aria-pressed', String(agent.id === project));
+        button.append(node('strong', '', agent.topic), node('span', 'flow-agent-state', agent.state.replaceAll('_', ' ').toLowerCase()), node('small', '', agent.error || agent.folder));
+        button.addEventListener('click', () => chooseProject(agent.id)); agents.append(button);
+      }
+      if (!projects.length) agents.append(node('p', 'help', 'No tasks yet. Enable automatic research in Orchestrator.'));
+      projectSelect.replaceChildren(...options); projectSelect.value = project;
+    }
+  }
+
+  function renderMapMessages(packets) {
+    const mapMessages = find('[data-map-messages]');
+    const mapKey = packets.slice(0, 6).map(packet => packet.id).join('|');
+    if (mapMessages && mapSignature !== mapKey) {
+      mapSignature = mapKey;
+      mapMessages.replaceChildren();
+      for (const packet of packets.slice(0, 6)) {
+        const button = node('button', `flow-map-message${failed(packet) ? ' map-message-error' : ''}`); button.type = 'button'; button.dataset.mapMessageId = packet.id;
+        button.append(node('span', '', `${names[packet.from]} → ${names[packet.to]} · ${stamp(packet.createdAt)}`), node('strong', '', packet.title));
+        button.title = packet.content; button.addEventListener('click', () => { inspect(packet); traffic.enqueue([packet], true); }); mapMessages.append(button);
+      }
+      if (!packets.length) mapMessages.append(node('p', 'help', 'Messages will appear here when research starts.'));
+    }
+  }
+
+  function renderConversation(packets) {
+    const messagesKey = packets.map(p => p.id).join('|');
+    if (messagesKey !== chatSignature) {
+      chatSignature = messagesKey;
+      const scrollTop = chat.scrollTop;
+      chat.replaceChildren();
+      for (const packet of packets) {
+        const button = node('button', `flow-message ${packet.kind === 'error' ? 'message-error' : ''}`);
+        button.type = 'button'; button.dataset.messageId = packet.id; button.setAttribute('aria-pressed', String(packet.id === selected));
+        button.append(node('span', 'message-route', `${names[packet.from]} to ${names[packet.to]} · ${stamp(packet.createdAt)}`), node('strong', '', packet.title), node('span', 'message-preview', packet.content.slice(0, 180) || packet.kind));
+        button.addEventListener('click', () => { inspect(packet); traffic.enqueue([packet], true); }); chat.append(button);
+      }
+      if (!packets.length) chat.append(node('p', 'help', 'No recorded messages for this selection yet.'));
+      chat.scrollTop = scrollTop;
+      if (!selected && packets.length && (!peek || peek.hidden) && !dialog?.open) inspect(packets.find(packet => packet.content) || packets[0], { open: false });
+    }
+  }
+
   function render(data) {
     conversationPackets = data.packets;
     names.model = data.provider === 'nvidia' ? 'NVIDIA' : 'Model';
@@ -202,56 +255,17 @@ class FlowTraffic {
     error.textContent = data.error ? `${data.error}${data.retryAt ? ` Retry: ${new Date(data.retryAt).toLocaleString()}.` : ''}` : '';
     error.className = `notice ${/denied|rejected|failed|invalid|did not return/i.test(data.error || '') ? 'error' : 'action'}`;
 
-    const agentsKey = JSON.stringify(data.projects);
-    if (agentsKey !== agentSignature) {
-      agentSignature = agentsKey;
-      const agents = find('[data-flow-agents]'); agents.replaceChildren();
-      const options = [node('option', '', 'All agents')]; options[0].value = '';
-      for (const agent of data.projects) {
-        const option = node('option', '', agent.folder); option.value = agent.id; options.push(option);
-        const button = node('button', 'flow-agent'); button.type = 'button'; button.dataset.agentId = agent.id;
-        button.setAttribute('aria-pressed', String(agent.id === project));
-        button.append(node('strong', '', agent.topic), node('span', 'flow-agent-state', agent.state.replaceAll('_', ' ').toLowerCase()), node('small', '', agent.error || agent.folder));
-        button.addEventListener('click', () => chooseProject(agent.id)); agents.append(button);
-      }
-      if (!data.projects.length) agents.append(node('p', 'help', 'No tasks yet. Enable automatic research in Orchestrator.'));
-      projectSelect.replaceChildren(...options); projectSelect.value = project;
-    }
+    renderAgents(data.projects);
     root.querySelectorAll('[data-node]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.node === filterNode)));
     find('[data-flow-filter]').textContent = `${project ? data.projects.find(p => p.id === project)?.folder || 'Selected task' : 'All agents'}${filterNode ? ` · ${names[filterNode]}` : ''}`;
-    const packets = data.packets.filter(p => (!project || p.projectId === project) && (!filterNode || p.from === filterNode || p.to === filterNode));
+    const packets = data.packets.filter(eligible);
     for (const button of root.querySelectorAll('[data-node]')) {
       const latest = packets.find(packet => packet.from === button.dataset.node || packet.to === button.dataset.node);
       const last = button.querySelector('[data-node-last]');
       if (last) { last.textContent = latest ? latest.title : 'Waiting for messages'; last.title = latest?.content || ''; }
     }
-    const mapMessages = find('[data-map-messages]');
-    const mapKey = packets.slice(0, 6).map(packet => packet.id).join('|');
-    if (mapMessages && mapSignature !== mapKey) {
-      mapSignature = mapKey;
-      mapMessages.replaceChildren();
-      for (const packet of packets.slice(0, 6)) {
-        const button = node('button', `flow-map-message${failed(packet) ? ' map-message-error' : ''}`); button.type = 'button'; button.dataset.mapMessageId = packet.id;
-        button.append(node('span', '', `${names[packet.from]} → ${names[packet.to]} · ${stamp(packet.createdAt)}`), node('strong', '', packet.title));
-        button.title = packet.content; button.addEventListener('click', () => { inspect(packet); traffic.enqueue([packet], true); }); mapMessages.append(button);
-      }
-      if (!packets.length) mapMessages.append(node('p', 'help', 'Messages will appear here when research starts.'));
-    }
-    const messagesKey = packets.map(p => p.id).join('|');
-    if (messagesKey !== chatSignature) {
-      chatSignature = messagesKey;
-      const scrollTop = chat.scrollTop;
-      chat.replaceChildren();
-      for (const packet of packets) {
-        const button = node('button', `flow-message ${packet.kind === 'error' ? 'message-error' : ''}`);
-        button.type = 'button'; button.dataset.messageId = packet.id; button.setAttribute('aria-pressed', String(packet.id === selected));
-        button.append(node('span', 'message-route', `${names[packet.from]} to ${names[packet.to]} · ${stamp(packet.createdAt)}`), node('strong', '', packet.title), node('span', 'message-preview', packet.content.slice(0, 180) || packet.kind));
-        button.addEventListener('click', () => { inspect(packet); traffic.enqueue([packet], true); }); chat.append(button);
-      }
-      if (!packets.length) chat.append(node('p', 'help', 'No recorded messages for this selection yet.'));
-      chat.scrollTop = scrollTop;
-      if (!selected && packets.length && (!peek || peek.hidden) && !dialog?.open) inspect(packets.find(packet => packet.content) || packets[0], { open: false });
-    }
+    renderMapMessages(packets);
+    renderConversation(packets);
   }
 
   async function accept(data) {
@@ -280,16 +294,22 @@ class FlowTraffic {
     }
   }
 
+  function renderSelection() {
+    if (!snapshot) return;
+    if (paused) render(snapshot);
+    else accept(snapshot);
+  }
+
   function chooseProject(value) {
     project = value; selected = ''; agentSignature = ''; chatSignature = ''; selectionVersion++;
     traffic.prune(eligible);
-    if (snapshot) { if (paused) render(snapshot); else accept(snapshot); }
+    renderSelection();
   }
   projectSelect.addEventListener('change', () => chooseProject(projectSelect.value));
   root.querySelectorAll('[data-node]').forEach(button => button.addEventListener('click', () => {
-    filterNode = filterNode === button.dataset.node ? '' : button.dataset.node; chatSignature = ''; traffic.prune(eligible); if (snapshot) { if (paused) render(snapshot); else accept(snapshot); }
+    filterNode = filterNode === button.dataset.node ? '' : button.dataset.node; chatSignature = ''; traffic.prune(eligible); renderSelection();
   }));
-  find('[data-clear-node]').addEventListener('click', () => { filterNode = ''; chatSignature = ''; if (snapshot) { if (paused) render(snapshot); else accept(snapshot); } });
+  find('[data-clear-node]').addEventListener('click', () => { filterNode = ''; chatSignature = ''; renderSelection(); });
   pauseButton.addEventListener('click', () => {
     paused = !paused; pauseButton.setAttribute('aria-pressed', String(paused)); pauseButton.textContent = paused ? 'Resume view' : 'Pause view';
     root.classList.toggle('flow-paused', paused);

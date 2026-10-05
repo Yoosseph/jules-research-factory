@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../src/db.mjs';
+import { storeFixture, temporaryDirectory } from './support/fixtures.mjs';
 
 test('a new numbering series can start at 1 while old local history remains', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-numbering-'));
-  const store = openStore(directory);
+  const { store, cleanup } = storeFixture('researchforge-numbering-');
   try {
     store.saveBinding({ owner: 'Owner', repo: 'repo', fullName: 'Owner/repo', githubId: '42', branch: 'main', sourceName: 'sources/repo' });
     const old = store.reserve(['Yesterday']);
@@ -28,13 +26,12 @@ test('a new numbering series can start at 1 while old local history remains', ()
     assert.equal(store.nextProjectNumber(), 3);
     assert.equal(store.reserve(['Another'])[0].folder_number, 3);
   } finally {
-    store.db.close();
-    rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });
 
 test('an existing database keeps project history during numbering migration', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-numbering-migrate-'));
+  const { directory, cleanup } = temporaryDirectory('researchforge-numbering-migrate-');
   const path = join(directory, 'researchforge.sqlite');
   const legacy = new DatabaseSync(path);
   legacy.exec(`CREATE TABLE projects (
@@ -57,6 +54,6 @@ test('an existing database keeps project history during numbering migration', ()
     assert.equal(fresh.number_generation, 1);
   } finally {
     store.db.close();
-    rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });

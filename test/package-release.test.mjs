@@ -1,26 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { gunzipSync } from 'node:zlib';
+import { temporaryDirectory } from './support/fixtures.mjs';
 
 const script = fileURLToPath(new URL('../scripts/package-release.mjs', import.meta.url));
 
 function fixture(t, version = '0.2.0') {
-  const directory = mkdtempSync(join(tmpdir(), 'research-facility-release-'));
-  t.after(() => {
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
-  });
+  const { directory, cleanup } = temporaryDirectory('research-facility-release-');
+  t.after(cleanup);
   function write(path, contents) {
     mkdirSync(dirname(join(directory, path)), { recursive: true });
     writeFileSync(join(directory, path), contents);
   }
   write('package.json', JSON.stringify({ name: 'research-facility', version }));
-  for (const path of ['package-lock.json', 'LICENSE', 'prompt-template.txt', '.env.example', 'src/server.mjs', 'public/style.css', 'prompts/research.txt', 'LICENSES/Apache-2.0.txt']) {
+  for (const path of ['package-lock.json', 'LICENSE', 'prompt-template.txt', '.env.example', 'src/server.mjs', 'src/http/forms.mjs', 'public/style.css', 'scripts/lib/check.mjs', 'test/support/fixtures.mjs', 'prompts/research.txt', 'LICENSES/Apache-2.0.txt']) {
     write(path, 'committed release content');
   }
   // Track synthetic private files to exercise packaging's own exclusion rules.
@@ -76,7 +74,7 @@ test('release archives include committed app files and licenses, exclude private
   const tar = tarEntries(gunzipSync(readFileSync(join(directory, 'dist/research-facility-0.2.0.tar.gz'))));
   const zip = zipEntries(readFileSync(join(directory, 'dist/research-facility-0.2.0.zip')));
   for (const entries of [[...tar.keys()], zip]) {
-    for (const path of ['package.json', 'package-lock.json', 'src/server.mjs', 'public/style.css', 'LICENSE', 'LICENSES/Apache-2.0.txt', '.env.example', 'prompts/research.txt']) {
+    for (const path of ['package.json', 'package-lock.json', 'src/server.mjs', 'src/http/forms.mjs', 'public/style.css', 'scripts/lib/check.mjs', 'test/support/fixtures.mjs', 'LICENSE', 'LICENSES/Apache-2.0.txt', '.env.example', 'prompts/research.txt']) {
       assert.ok(entries.includes(prefix + path), `${path} is included`);
     }
     assert.ok(entries.every(path => !/\.env\.local|\/\.env$|\/\.data\/|\/node_modules\/|\/\.github\/|untracked/.test(path)));

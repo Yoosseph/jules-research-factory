@@ -1,5 +1,24 @@
 const activeStatuses = ['queued', 'launching', 'running'];
-const text = value => { const content = String(value ?? ''); return content.length > 20000 ? `${content.slice(0, 20000)}\n[Message truncated to 20,000 characters.]` : content; };
+const text = value => {
+  const content = String(value ?? '');
+  return content.length > 20000 ? `${content.slice(0, 20000)}\n[Message truncated to 20,000 characters.]` : content;
+};
+
+function redactor(store) {
+  const secrets = ['jules', 'github', 'orchestrator'].map(name => store.getSecret(name)).filter(Boolean);
+  return value => secrets.reduce((safe, secret) => safe.replaceAll(secret, '[redacted]'), String(value ?? ''));
+}
+
+function reportUrl(project) {
+  if (!['open', 'merged', 'closed'].includes(project?.pr_status)) return;
+  try {
+    const url = new URL(project.pr_url);
+    const match = url.pathname.match(/^\/([^/]+\/[^/]+)\/pull\/(\d+)\/?$/);
+    if (url.protocol === 'https:' && url.hostname === 'github.com' && !url.username && !url.password && match?.[1].toLowerCase() === project.repository_full_name.toLowerCase()) {
+      return `https://github.com/${match[1]}/pull/${match[2]}`;
+    }
+  } catch { /* A malformed saved destination must not become a clickable artifact. */ }
+}
 
 export function initializeFlow(store) {
   store.db.exec(`CREATE TABLE IF NOT EXISTS agent_packets (
@@ -11,14 +30,9 @@ export function initializeFlow(store) {
 
 export function recordPacket(store, { projectId = null, from = 'coordinator', to = 'jules', kind = 'message', title, content = '' }) {
   // Credentials never belong in the readable conversation stream.
-  let safe = String(content ?? '');
-  let safeTitle = String(title ?? '');
-  for (const name of ['jules', 'github', 'orchestrator']) {
-    const secret = store.getSecret(name);
-    if (secret) { safe = safe.replaceAll(secret, '[redacted]'); safeTitle = safeTitle.replaceAll(secret, '[redacted]'); }
-  }
+  const redact = redactor(store);
   return Number(store.db.prepare('INSERT INTO agent_packets(project_id,from_node,to_node,kind,title,content,created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(projectId, from, to, kind, text(safeTitle), text(safe), new Date().toISOString()).lastInsertRowid);
+    .run(projectId, from, to, kind, text(redact(title)), text(redact(content)), new Date().toISOString()).lastInsertRowid);
 }
 
 export function flowSnapshot(store, { modelBusy = false, projectId = null } = {}) {
@@ -37,18 +51,14 @@ export function flowSnapshot(store, { modelBusy = false, projectId = null } = {}
     packets.push({ id: `prompt:${p.id}`, projectId: p.id, from: p.orchestrator_instructions ? 'model' : 'coordinator', to: 'jules', kind: 'history', title: 'Saved task instructions', content: p.prompt_text, createdAt: p.created_at, observed: false });
   }
   packets.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-  const secrets = ['jules', 'github', 'orchestrator'].map(name => store.getSecret(name)).filter(Boolean);
-  const redact = value => secrets.reduce((safe, secret) => safe.replaceAll(secret, '[redacted]'), String(value ?? ''));
+  const redact = redactor(store);
   const byProject = new Map(projects.map(project => [project.id, project]));
   for (const packet of packets) {
     packet.content = redact(packet.content); packet.title = redact(packet.title);
     const project = byProject.get(packet.projectId);
-    if (['report', 'completed'].includes(packet.kind) && ['open', 'merged', 'closed'].includes(project?.pr_status)) {
-      try {
-        const url = new URL(project.pr_url);
-        const match = url.pathname.match(/^\/([^/]+\/[^/]+)\/pull\/(\d+)\/?$/);
-        if (url.protocol === 'https:' && url.hostname === 'github.com' && !url.username && !url.password && match?.[1].toLowerCase() === project.repository_full_name.toLowerCase()) packet.productUrl = `https://github.com/${match[1]}/pull/${match[2]}`;
-      } catch { /* A malformed saved destination must not become a clickable artifact. */ }
+    if (['report', 'completed'].includes(packet.kind)) {
+      const destination = reportUrl(project);
+      if (destination) packet.productUrl = destination;
     }
   }
   const retryAt = store.get('orchestratorRetryAt') || null;

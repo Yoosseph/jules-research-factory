@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadEnv } from '../src/config.mjs';
+import { temporaryDirectory } from './support/fixtures.mjs';
 
 test('loads .env and local overrides while keeping process values and ignoring blank placeholders', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-env-'));
+  const { directory, cleanup } = temporaryDirectory('researchforge-env-');
   const originalDirectory = process.cwd();
   try {
     writeFileSync(join(directory, '.env'), 'JULES_API_KEY="file-jules"\nNVIDIA_API_KEY=file-nvidia\nGITHUB_TOKEN=file-github\n');
@@ -20,6 +20,6 @@ test('loads .env and local overrides while keeping process values and ignoring b
     assert.equal(onlyFile.JULES_API_KEY, 'file-jules');
   } finally {
     process.chdir(originalDirectory);
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });
