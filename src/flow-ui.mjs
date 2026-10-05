@@ -1,4 +1,4 @@
-import { layout } from './ui.mjs';
+import { layout } from './layout.mjs';
 import { icon } from './icons.mjs';
 
 const packetReader = expanded => `<div class="packet-reader-heading"><span class="eyebrow" data-packet-kind>Message</span><button class="packet-reader-close" type="button" ${expanded ? 'data-packet-dialog-close' : 'data-packet-peek-close'} aria-label="Close message">Close</button></div><h2 id="${expanded ? 'packet-expanded-title' : 'packet-peek-title'}" data-packet-title>Select a message</h2><p class="help" data-packet-route></p><pre class="packet-reader-content" data-packet-content></pre><div class="packet-reader-actions"><button class="ghost" type="button" ${expanded ? 'data-packet-collapse' : 'data-packet-expand'}>${expanded ? 'Compact view' : 'Expand message'} ${icon(expanded ? 'arrow-left' : 'arrow-up-right')}</button><a class="text-link" data-packet-product hidden target="_blank" rel="noopener noreferrer">Open completed report ${icon('arrow-up-right')}</a><a class="text-link" data-packet-project hidden>Task timeline ${icon('arrow-up-right')}</a></div>`;

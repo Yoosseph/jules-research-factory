@@ -29,35 +29,49 @@ async function request(provider, url, headers, options = {}) {
   return body;
 }
 
+async function tokenPages(get, path, collection, { repeatedMessage, maxTokens = Infinity, maxItems = Infinity, limitMessage } = {}) {
+  const all = [], seenTokens = new Set();
+  let pageToken = '';
+  do {
+    const params = new URLSearchParams({ pageSize: '100' });
+    if (pageToken) params.set('pageToken', pageToken);
+    const page = await get(`${path}?${params}`);
+    all.push(...(page[collection] ?? []));
+    pageToken = page.nextPageToken ?? '';
+    if (pageToken && repeatedMessage && seenTokens.has(pageToken)) throw new Error(repeatedMessage);
+    if (pageToken) seenTokens.add(pageToken);
+    if (all.length > maxItems || seenTokens.size > maxTokens) throw new Error(limitMessage);
+  } while (pageToken);
+  return all;
+}
+
+async function numberedPages(get, path) {
+  const all = [];
+  for (let page = 1; ; page++) {
+    const result = await get(`${path}?per_page=100&page=${page}`);
+    all.push(...result);
+    if (result.length < 100) return all;
+  }
+}
+
+function sessionPath(name) {
+  if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid Jules session name');
+  return `/${name}`;
+}
+
 export function julesClient(apiKey) {
   const headers = { 'x-goog-api-key': apiKey, accept: 'application/json' };
   const get = path => request('Jules', `${JULES}${path}`, headers);
+  const post = (path, body) => request('Jules', `${JULES}${path}`, headers, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  });
   return {
-    async sessions() {
-      const all = [], seenTokens = new Set();
-      let pageToken = '';
-      do {
-        const params = new URLSearchParams({ pageSize: '100' });
-        if (pageToken) params.set('pageToken', pageToken);
-        const page = await get(`/sessions?${params}`);
-        all.push(...(page.sessions ?? []));
-        pageToken = page.nextPageToken ?? '';
-        if (pageToken && seenTokens.has(pageToken)) throw new Error('Jules repeated a session page.');
-        if (pageToken) seenTokens.add(pageToken);
-        if (seenTokens.size > 100) throw new Error('Jules session history is too large to check capacity.');
-      } while (pageToken);
-      return all;
-    },
+    sessions: () => tokenPages(get, '/sessions', 'sessions', {
+      repeatedMessage: 'Jules repeated a session page.', maxTokens: 100,
+      limitMessage: 'Jules session history is too large to check capacity.'
+    }),
     async sources() {
-      const all = [];
-      let pageToken = '';
-      do {
-        const params = new URLSearchParams({ pageSize: '100' });
-        if (pageToken) params.set('pageToken', pageToken);
-        const page = await get(`/sources?${params}`);
-        all.push(...(page.sources ?? []));
-        pageToken = page.nextPageToken ?? '';
-      } while (pageToken);
+      const all = await tokenPages(get, '/sources', 'sources');
       return all.filter(source => source.name && source.githubRepo?.owner && source.githubRepo?.repo);
     },
     source(name) {
@@ -65,49 +79,28 @@ export function julesClient(apiKey) {
       return get(`/${name}`);
     },
     session(name) {
-      if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid Jules session name');
-      return get(`/${name}`);
+      return get(sessionPath(name));
     },
     deleteSession(name) {
-      if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid Jules session name');
-      return request('Jules', `${JULES}/${name}`, headers, { method: 'DELETE' });
+      return request('Jules', `${JULES}${sessionPath(name)}`, headers, { method: 'DELETE' });
     },
     approvePlan(name) {
-      if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid Jules session name');
-      return request('Jules', `${JULES}/${name}:approvePlan`, headers, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
-      });
+      return post(`${sessionPath(name)}:approvePlan`, {});
     },
     sendMessage(name, prompt) {
-      if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid Jules session name');
+      const path = sessionPath(name);
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 10000) throw new Error('Enter a message of 1–10,000 characters.');
-      return request('Jules', `${JULES}/${name}:sendMessage`, headers, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: prompt.trim() })
-      });
+      return post(`${path}:sendMessage`, { prompt: prompt.trim() });
     },
     async activities(name) {
-      if (!/^sessions\/[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid Jules session name');
-      const all = [];
-      let pageToken = '';
-      const seenTokens = new Set();
-      do {
-        const params = new URLSearchParams({ pageSize: '100' });
-        if (pageToken) params.set('pageToken', pageToken);
-        const page = await get(`/${name}/activities?${params}`);
-        all.push(...(page.activities ?? []));
-        pageToken = page.nextPageToken ?? '';
-        if (pageToken && seenTokens.has(pageToken)) throw new Error('Jules repeated an activity page. Open the session in Jules for the full history.');
-        if (pageToken) seenTokens.add(pageToken);
-        if (all.length > 5000 || seenTokens.size > 50) throw new Error('Jules returned more than 5,000 activities for one session. Open the session in Jules for the full history.');
-      } while (pageToken);
-      return all;
+      return tokenPages(get, `${sessionPath(name)}/activities`, 'activities', {
+        repeatedMessage: 'Jules repeated an activity page. Open the session in Jules for the full history.',
+        maxItems: 5000, maxTokens: 50,
+        limitMessage: 'Jules returned more than 5,000 activities for one session. Open the session in Jules for the full history.'
+      });
     },
     createSession({ prompt, title, sourceName, branch }) {
-      return request('Jules', `${JULES}/sessions`, headers, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, title, sourceContext: { source: sourceName, githubRepoContext: { startingBranch: branch } }, requirePlanApproval: false, automationMode: 'AUTO_CREATE_PR' })
-      });
+      return post('/sessions', { prompt, title, sourceContext: { source: sourceName, githubRepoContext: { startingBranch: branch } }, requirePlanApproval: false, automationMode: 'AUTO_CREATE_PR' });
     }
   };
 }
@@ -121,25 +114,11 @@ export function githubClient(token) {
     repo: (owner, repo) => get(repoPath(owner, repo)),
     branch: (owner, repo, branch) => get(`${repoPath(owner, repo)}/branches/${encodeURIComponent(branch)}`),
     commit: (owner, repo, sha) => get(`${repoPath(owner, repo)}/git/commits/${encodeURIComponent(sha)}`),
-    async branches(owner, repo) {
-      const all = [];
-      for (let page = 1; ; page++) {
-        const result = await get(`${repoPath(owner, repo)}/branches?per_page=100&page=${page}`);
-        all.push(...result);
-        if (result.length < 100) return all;
-      }
-    },
+    branches: async (owner, repo) => numberedPages(get, `${repoPath(owner, repo)}/branches`),
     root: (owner, repo, branch) => get(`${repoPath(owner, repo)}/contents?ref=${encodeURIComponent(branch)}`),
     tree: (owner, repo, sha) => get(`${repoPath(owner, repo)}/git/trees/${encodeURIComponent(sha)}`),
     pulls: (owner, repo) => get(`${repoPath(owner, repo)}/pulls?state=open&per_page=1`),
     pull: (owner, repo, number) => get(`${repoPath(owner, repo)}/pulls/${number}`),
-    async pullFiles(owner, repo, number) {
-      const all = [];
-      for (let page = 1; ; page++) {
-        const result = await get(`${repoPath(owner, repo)}/pulls/${number}/files?per_page=100&page=${page}`);
-        all.push(...result);
-        if (result.length < 100) return all;
-      }
-    }
+    pullFiles: async (owner, repo, number) => numberedPages(get, `${repoPath(owner, repo)}/pulls/${number}/files`)
   };
 }

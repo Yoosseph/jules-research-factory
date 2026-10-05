@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes, createCipheriv, createDecipheriv, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { initializeStoreSchema, transaction } from './store-schema.mjs';
+import { bindingIdentity } from './core.mjs';
 
 export function openStore(directory = '.data') {
   mkdirSync(directory, { recursive: true });
@@ -15,82 +17,8 @@ export function openStore(directory = '.data') {
   }
   if (key.length !== 32) throw new Error('Local encryption key is invalid. Restore the original .data/secret.key.');
   const db = new DatabaseSync(join(directory, 'researchforge.sqlite'));
-  db.exec(`
-    PRAGMA journal_mode=WAL;
-    PRAGMA foreign_keys=ON;
-    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS prompt_presets (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, template TEXT NOT NULL,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS binding (
-      id TEXT PRIMARY KEY, github_owner TEXT NOT NULL, github_repo TEXT NOT NULL,
-      github_full_name TEXT NOT NULL, github_repository_id TEXT NOT NULL,
-      base_branch TEXT NOT NULL, jules_source_id TEXT NOT NULL,
-      verified_jules_access INTEGER NOT NULL, verified_github_access INTEGER NOT NULL,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS remote_folders (name TEXT PRIMARY KEY, number INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY, topic TEXT NOT NULL, slug TEXT NOT NULL,
-      folder_number INTEGER NOT NULL, folder TEXT NOT NULL, number_generation INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL, binding_identity TEXT NOT NULL, repository_full_name TEXT NOT NULL,
-      base_branch TEXT NOT NULL, jules_session_name TEXT, jules_session_url TEXT,
-      pr_url TEXT, pr_status TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-      prompt_text TEXT, jules_state TEXT, jules_polled_at TEXT, activity_error TEXT,
-      UNIQUE(number_generation,folder_number), UNIQUE(number_generation,folder)
-    );
-    CREATE TABLE IF NOT EXISTS events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT,
-      kind TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS jules_activities (
-      name TEXT PRIMARY KEY, project_id TEXT NOT NULL,
-      kind TEXT NOT NULL, originator TEXT NOT NULL,
-      summary TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS jules_activities_project_time ON jules_activities(project_id,created_at);
-    CREATE TABLE IF NOT EXISTS jules_auto_replies (
-      activity_name TEXT PRIMARY KEY, project_id TEXT NOT NULL,
-      status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS jules_auto_replies_project_time ON jules_auto_replies(project_id,created_at);
-  `);
-  const projectColumns = new Set(db.prepare('PRAGMA table_info(projects)').all().map(column => column.name));
-  if (!projectColumns.has('binding_identity')) db.exec("ALTER TABLE projects ADD COLUMN binding_identity TEXT NOT NULL DEFAULT ''");
-  if (!projectColumns.has('repository_full_name')) db.exec("ALTER TABLE projects ADD COLUMN repository_full_name TEXT NOT NULL DEFAULT ''");
-  if (!projectColumns.has('base_branch')) db.exec("ALTER TABLE projects ADD COLUMN base_branch TEXT NOT NULL DEFAULT ''");
-  if (!projectColumns.has('pr_status')) db.exec('ALTER TABLE projects ADD COLUMN pr_status TEXT');
-  if (!projectColumns.has('prompt_text')) db.exec('ALTER TABLE projects ADD COLUMN prompt_text TEXT');
-  if (!projectColumns.has('jules_state')) db.exec('ALTER TABLE projects ADD COLUMN jules_state TEXT');
-  if (!projectColumns.has('jules_polled_at')) db.exec('ALTER TABLE projects ADD COLUMN jules_polled_at TEXT');
-  if (!projectColumns.has('activity_error')) db.exec('ALTER TABLE projects ADD COLUMN activity_error TEXT');
-  if (!projectColumns.has('number_generation')) {
-    db.exec(`
-      BEGIN IMMEDIATE;
-      CREATE TABLE projects_next (
-        id TEXT PRIMARY KEY, topic TEXT NOT NULL, slug TEXT NOT NULL,
-        folder_number INTEGER NOT NULL, folder TEXT NOT NULL, number_generation INTEGER NOT NULL DEFAULT 0,
-        status TEXT NOT NULL, binding_identity TEXT NOT NULL, repository_full_name TEXT NOT NULL,
-        base_branch TEXT NOT NULL, jules_session_name TEXT, jules_session_url TEXT,
-        pr_url TEXT, pr_status TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        prompt_text TEXT, jules_state TEXT, jules_polled_at TEXT, activity_error TEXT,
-        UNIQUE(number_generation,folder_number), UNIQUE(number_generation,folder)
-      );
-      INSERT INTO projects_next (
-        id,topic,slug,folder_number,folder,status,binding_identity,repository_full_name,base_branch,
-        jules_session_name,jules_session_url,pr_url,pr_status,error,created_at,updated_at,
-        prompt_text,jules_state,jules_polled_at,activity_error
-      ) SELECT
-        id,topic,slug,folder_number,folder,status,binding_identity,repository_full_name,base_branch,
-        jules_session_name,jules_session_url,pr_url,pr_status,error,created_at,updated_at,
-        prompt_text,jules_state,jules_polled_at,activity_error FROM projects;
-      DROP TABLE projects;
-      ALTER TABLE projects_next RENAME TO projects;
-      COMMIT;
-    `);
-  }
-  if (!projectColumns.has('orchestrator_instructions')) db.exec('ALTER TABLE projects ADD COLUMN orchestrator_instructions TEXT');
+  try { initializeStoreSchema(db); }
+  catch (error) { db.close(); throw error; }
 
   const set = (name, value) => db.prepare('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(name, String(value));
   const get = name => db.prepare('SELECT value FROM settings WHERE key=?').get(name)?.value;
@@ -151,37 +79,31 @@ export function openStore(directory = '.data') {
   const setNextProjectNumber = value => {
     const number = Number(value);
     if (!Number.isSafeInteger(number) || number < 1 || number > 1000000) throw new Error('Enter a next project number from 1 to 1,000,000.');
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    return transaction(db, () => {
       const pending = db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('reserved','queued','launching','running')").get().n;
       if (pending) throw new Error('Clear reserved projects and finish or stop active tasks before changing the project number.');
       set('project_number_generation', currentGeneration() + 1);
       set('next_project_number', number);
       log('project_number_changed', `Started a new numbering series at ${number}`);
-      const next = nextProjectNumber();
-      db.exec('COMMIT');
-      return next;
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
+      return nextProjectNumber();
+    });
   };
   const replaceRemoteFolders = folders => {
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    return transaction(db, () => {
       db.prepare('DELETE FROM remote_folders').run();
       const insert = db.prepare('INSERT INTO remote_folders(name,number) VALUES (?,?)');
       for (const folder of folders) insert.run(folder.name, folder.number);
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    });
   };
   const reserve = (topics, instructions = null) => {
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    return transaction(db, () => {
       let next = nextProjectNumber();
       const generation = currentGeneration();
       const occupied = new Set(db.prepare('SELECT number FROM remote_folders').all().map(item => item.number));
       const insert = db.prepare('INSERT INTO projects(id,topic,slug,folder_number,folder,number_generation,status,binding_identity,repository_full_name,base_branch,created_at,updated_at,orchestrator_instructions) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
       const currentBinding = binding();
       if (!currentBinding) throw new Error('No repository binding');
-      const identity = `${currentBinding.github_repository_id}|${currentBinding.jules_source_id}|${currentBinding.base_branch}`;
+      const identity = bindingIdentity(currentBinding);
       const result = [];
       for (const topic of topics) {
         while (occupied.has(next)) next++;
@@ -193,13 +115,11 @@ export function openStore(directory = '.data') {
         result.push(project(id));
       }
       if (get('next_project_number') !== undefined) set('next_project_number', next);
-      db.exec('COMMIT');
       return result;
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    });
   };
   const removeReservation = id => {
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    return transaction(db, () => {
       const reserved = project(id);
       if (!reserved || reserved.status !== 'reserved' || reserved.jules_session_name) throw new Error('Only unlaunched reservations can be removed.');
       const removed = db.prepare("DELETE FROM projects WHERE id=? AND status='reserved' AND jules_session_name IS NULL").run(id);
@@ -208,9 +128,8 @@ export function openStore(directory = '.data') {
       db.prepare('DELETE FROM jules_activities WHERE project_id=?').run(id);
       db.prepare('DELETE FROM jules_auto_replies WHERE project_id=?').run(id);
       log('reservation_removed', `Removed reservation ${reserved.folder}`);
-      db.exec('COMMIT');
       return reserved;
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    });
   };
   const clearProjects = category => {
     const statuses = {
@@ -220,8 +139,7 @@ export function openStore(directory = '.data') {
       stopped: ['stopped']
     }[category];
     if (!statuses) throw new Error('Choose a valid project category to clear.');
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    return transaction(db, () => {
       const marks = statuses.map(() => '?').join(',');
       const condition = `status IN (${marks})${category === 'reserved' ? ' AND jules_session_name IS NULL' : ''}`;
       const selected = db.prepare(`SELECT id,folder_number FROM projects WHERE ${condition}`).all(...statuses);
@@ -239,9 +157,8 @@ export function openStore(directory = '.data') {
         }
         log('projects_cleared', `Cleared ${selected.length} ${category} local project${selected.length === 1 ? '' : 's'}`);
       }
-      db.exec('COMMIT');
       return selected.length;
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    });
   };
   return { db, set, get, setSecret, getSecret, binding, saveBinding, log, projects, project, activities, latestActivity, autoReplies, remoteFolders, nextProjectNumber, setNextProjectNumber, replaceRemoteFolders, reserve, removeReservation, clearProjects };
 }

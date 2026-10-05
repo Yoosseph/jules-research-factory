@@ -14,6 +14,24 @@ Check existing issues and the [README](README.md). For a security concern, follo
 
 The app has no npm runtime dependencies. The test suite uses mocked Jules and GitHub responses, so no accounts or API keys are needed. To try a live connection, use the setup wizard or copy `.env.example` to `.env.local`; never commit credentials or `.data/`.
 
+## Where to find things
+
+The code files are grouped by what they do. A module is a code file that shares functions with other files.
+
+| Files | Responsibility |
+| --- | --- |
+| `src/server.mjs`, `src/app.mjs` | Start the local app and connect its parts. |
+| `src/routes.mjs`, `src/http.mjs`, `src/settings.mjs` | Handle browser pages, submitted forms, local file requests, and task defaults. HTTP is the way the browser talks to the local app. |
+| `src/research.mjs`, `src/auto-replies.mjs` | Launch and monitor research, check capacity, wait before retrying errors, and answer routine agent questions. |
+| `src/db.mjs`, `src/store-schema.mjs` | Save settings and research history, protect keys, and upgrade older saved data. A transaction groups database changes so they either all succeed or all get undone. |
+| `src/providers.mjs`, `src/core.mjs`, `src/orchestrator.mjs` | Connect to online services, verify report destinations, and request research plans. |
+| `src/prompt.mjs`, `src/config.mjs`, `src/bootstrap.mjs` | Manage research instructions and load optional account settings from local files. |
+| `src/layout.mjs`, `src/ui-helpers.mjs`, `src/*-ui.mjs`, `src/ui.mjs` | Build the page shell, shared page controls, setup screens, and workspace pages. |
+| `src/flow.mjs`, `src/flow-stream.mjs`, `public/` | Record and send live messages, animate the browser view, and supply styles and licensed assets. |
+| `test/`, `scripts/` | Check behavior with simulated services, check syntax, and build release downloads. Shared test setup lives in `test/support/`. |
+
+Keep changes close to the responsibility they affect. The existing setup, research, prompt, live-flow, and release tests protect the complete workflow; retain them when moving code between modules.
+
 ## Pull requests
 
 - Open an issue first for a substantial change so the intended behavior can be discussed.

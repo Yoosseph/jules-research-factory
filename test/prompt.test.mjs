@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openStore } from '../src/db.mjs';
+import { storeFixture } from './support/fixtures.mjs';
 import { initializePromptLibrary, promptLibrary, activatePrompt } from '../src/prompt.mjs';
 
 test('first launch preserves an existing custom prompt and selects web research', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-prompts-'));
-  const store = openStore(directory);
+  const { directory, store, cleanup } = storeFixture('researchforge-prompts-');
   const path = join(directory, 'prompt-template.txt');
   const custom = 'Research {{topic}} in {{repository}} on {{branch}}. Write a careful answer inside {{folder}}/ with linked sources and state the limits of the available evidence.';
   try {
@@ -23,14 +21,12 @@ test('first launch preserves an existing custom prompt and selects web research'
     initializePromptLibrary(store, path);
     assert.equal(promptLibrary(store).activeId, 'previous-prompt');
   } finally {
-    store.db.close();
-    rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });
 
 test('bundled web prompt upgrades without discarding its previous version', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-prompt-upgrade-'));
-  const store = openStore(directory);
+  const { directory, store, cleanup } = storeFixture('researchforge-prompt-upgrade-');
   const path = join(directory, 'prompt-template.txt');
   const earlier = 'Research {{topic}} in {{repository}} on {{branch}}. Keep files inside {{folder}}/. Review web sources, cite findings, and explain uncertainty in the answer.';
   try {
@@ -45,7 +41,6 @@ test('bundled web prompt upgrades without discarding its previous version', () =
     assert.equal(library.presets.find(preset => preset.id === 'web-research-previous')?.template, earlier);
     assert.match(readFileSync(path, 'utf8'), /Search beyond the first page of results/);
   } finally {
-    store.db.close();
-    rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });

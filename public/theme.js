@@ -2,6 +2,7 @@
   const preference = matchMedia('(prefers-color-scheme: dark)');
   let saved;
   try { saved = localStorage.getItem('research-facility-theme'); } catch { /* Private browsing may restrict storage. */ }
+  const preferredTheme = () => saved === 'dark' || saved === 'light' ? saved : preference.matches ? 'dark' : 'light';
   const apply = theme => {
     document.documentElement.dataset.theme = theme;
     const button = document.querySelector('[data-theme-toggle]');
@@ -9,7 +10,7 @@
     const favicon = document.querySelector('link[rel="icon"]');
     if (favicon) favicon.href = theme === 'dark' ? '/favicon-dark.svg' : '/favicon.svg';
   };
-  apply(saved === 'dark' || saved === 'light' ? saved : preference.matches ? 'dark' : 'light');
+  apply(preferredTheme());
   document.addEventListener('DOMContentLoaded', () => {
     apply(document.documentElement.dataset.theme);
     document.querySelector('[data-theme-toggle]')?.addEventListener('click', () => {
@@ -19,5 +20,5 @@
     });
   });
   preference.addEventListener('change', event => { if (!saved) apply(event.matches ? 'dark' : 'light'); });
-  addEventListener('storage', event => { if (event.key === 'research-facility-theme') { saved = event.newValue; apply(saved === 'dark' ? 'dark' : saved === 'light' ? 'light' : preference.matches ? 'dark' : 'light'); } });
+  addEventListener('storage', event => { if (event.key === 'research-facility-theme') { saved = event.newValue; apply(preferredTheme()); } });
 })();

@@ -1,4 +1,4 @@
-import { layout } from './ui.mjs';
+import { layout } from './layout.mjs';
 import { icon, brandSymbol } from './icons.mjs';
 
 export function welcomePage({ configured = false } = {}) {

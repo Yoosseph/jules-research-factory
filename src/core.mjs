@@ -6,6 +6,16 @@ export class BindingError extends Error {
 }
 
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+export const bindingIdentity = binding => `${binding.github_repository_id}|${binding.jules_source_id}|${binding.base_branch}`;
+
+async function requireGithubAccess(operation, message) {
+  try { return await operation(); }
+  catch (error) {
+    if (error.status === 404) throw new BindingError(message);
+    throw error;
+  }
+}
+
 export function numberedFolders(contents) {
   return (Array.isArray(contents) ? contents : [])
     .filter(item => item.type === 'dir' && /^([1-9]\d*)-.+/.test(item.name))
@@ -33,45 +43,25 @@ export async function verifyRepository({ julesKey, githubToken, owner, repo, bra
     throw new BindingError(`Repository binding mismatch: Jules source ${source.name} does not match ${owner}/${repo}.`);
   }
   await github.user();
-  let ghRepo;
-  try { ghRepo = await github.repo(owner, repo); }
-  catch (error) {
-    if (error.status === 404) throw new BindingError(`GitHub cannot access ${owner}/${repo} with this token. Check its resource owner and selected repositories.`);
-    throw error;
-  }
+  const ghRepo = await requireGithubAccess(() => github.repo(owner, repo), `GitHub cannot access ${owner}/${repo} with this token. Check its resource owner and selected repositories.`);
   if (!same(ghRepo.full_name, `${owner}/${repo}`) || !ghRepo.id) throw new BindingError('GitHub returned a different repository identity.');
   if (expectedGithubId && String(ghRepo.id) !== String(expectedGithubId)) throw new BindingError('GitHub repository identity changed. Repair the binding before launching.');
   const selectedBranch = branch || 'main';
-  let branches;
   let branchInfo;
   try { branchInfo = await github.branch(owner, repo, selectedBranch); }
   catch (error) {
     if (error.status !== 404) throw error;
-    branches = (await github.branches(owner, repo)).map(item => item.name);
+    const branches = (await github.branches(owner, repo)).map(item => item.name);
     throw new BindingError(`${selectedBranch} was not found. Choose an available branch.`, { code: 'BRANCH_MISSING', branches });
   }
   const julesBranches = detailed.githubRepo?.branches?.map(item => item.displayName) ?? [];
   if (julesBranches.length && !julesBranches.includes(selectedBranch)) {
     throw new BindingError(`Jules cannot see branch ${selectedBranch}. Refresh its repository access before launching.`, { code: 'JULES_BRANCH_MISSING' });
   }
-  try { await github.pulls(owner, repo); }
-  catch (error) {
-    if (error.status === 404) throw new BindingError(`GitHub cannot read pull requests for ${owner}/${repo}. Grant the token Pull requests: read access.`);
-    throw error;
-  }
-  let commit;
-  try { commit = await github.commit(owner, repo, branchInfo.commit.sha); }
-  catch (error) {
-    if (error.status === 404) throw new BindingError(`GitHub cannot read commits for ${owner}/${repo}. Grant the token Contents: read access.`);
-    throw error;
-  }
+  await requireGithubAccess(() => github.pulls(owner, repo), `GitHub cannot read pull requests for ${owner}/${repo}. Grant the token Pull requests: read access.`);
+  const commit = await requireGithubAccess(() => github.commit(owner, repo, branchInfo.commit.sha), `GitHub cannot read commits for ${owner}/${repo}. Grant the token Contents: read access.`);
   if (!commit.tree?.sha) throw new BindingError('GitHub did not provide the branch root tree.');
-  let tree;
-  try { tree = await github.tree(owner, repo, commit.tree.sha); }
-  catch (error) {
-    if (error.status === 404) throw new BindingError(`GitHub cannot read the tree for ${owner}/${repo}. Grant the token Contents: read access.`);
-    throw error;
-  }
+  const tree = await requireGithubAccess(() => github.tree(owner, repo, commit.tree.sha), `GitHub cannot read the tree for ${owner}/${repo}. Grant the token Contents: read access.`);
   if (tree.truncated) throw new BindingError('GitHub returned an incomplete repository tree. Refresh and retry.');
   const folders = numberedFolders(tree.tree?.map(item => ({ name: item.path, type: item.type === 'tree' ? 'dir' : 'file' })));
   return { owner: ghRepo.owner?.login ?? owner, repo: ghRepo.name ?? repo, fullName: ghRepo.full_name, githubId: String(ghRepo.id), branch: selectedBranch, sourceName: detailed.name, folders };
@@ -104,7 +94,7 @@ export function verifyReservations(projects, folders) {
 }
 
 export function verifyProjectBinding(projects, binding) {
-  const identity = `${binding.github_repository_id}|${binding.jules_source_id}|${binding.base_branch}`;
+  const identity = bindingIdentity(binding);
   if (projects.some(project => project.binding_identity !== identity)) {
     throw new BindingError('A reserved project belongs to a previous repository binding. Create new topics for this destination.');
   }
