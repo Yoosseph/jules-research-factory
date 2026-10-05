@@ -67,7 +67,9 @@ An API key or access token works like a password for an app. Keep yours private.
 
 ### 1. Download the app
 
-On [this repository's main page](https://github.com/Yoosseph/jules-research-factory), choose **Code → Download ZIP**. Extract the ZIP and open the extracted folder containing `package.json`.
+For a tested release, open [Releases](https://github.com/Yoosseph/jules-research-factory/releases) and download the attached `research-facility-VERSION.zip` file, where VERSION is the release number. Extract it and open the folder containing `package.json`. Releases also include a `.tar.gz` download and a checksum file for checking that your download is intact.
+
+If no release is available yet, or you want the latest changes, choose **Code → Download ZIP** on [this repository's main page](https://github.com/Yoosseph/jules-research-factory).
 
 If you already use Git, you can clone the repository instead.
 

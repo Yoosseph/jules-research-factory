@@ -4,6 +4,7 @@
 ## How to verify
 
 - [ ] `npm test`
+- [ ] `npm run check`
 - [ ] `git diff --check`
 - [ ] Documentation updated if behavior or setup changed
 
