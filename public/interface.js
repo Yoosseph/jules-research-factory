@@ -13,20 +13,17 @@ if (motionAllowed && 'IntersectionObserver' in window) {
   });
 }
 
-const provider = document.querySelector('#provider');
-const endpointGroup = document.querySelector('[data-compatible-endpoint]');
-if (provider && endpointGroup) {
-  const update = () => { endpointGroup.hidden = provider.value !== 'compatible'; };
-  provider.addEventListener('change', update);
+function toggleFieldGroup(selectSelector, groupSelector, visibleValue) {
+  const select = document.querySelector(selectSelector);
+  const group = document.querySelector(groupSelector);
+  if (!select || !group) return;
+  const update = () => { group.hidden = select.value !== visibleValue; };
+  select.addEventListener('change', update);
   update();
 }
-const mode = document.querySelector('#mode');
-const intervalGroup = document.querySelector('[data-scheduled-interval]');
-if (mode && intervalGroup) {
-  const update = () => { intervalGroup.hidden = mode.value !== 'scheduled'; };
-  mode.addEventListener('change', update);
-  update();
-}
+
+toggleFieldGroup('#provider', '[data-compatible-endpoint]', 'compatible');
+toggleFieldGroup('#mode', '[data-scheduled-interval]', 'scheduled');
 document.querySelectorAll('[data-confirm]').forEach(button => {
   button.addEventListener('click', event => {
     if (!confirm(button.dataset.confirm)) event.preventDefault();

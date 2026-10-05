@@ -1,14 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
 import { openStore } from '../src/db.mjs';
+import { storeFixture, temporaryDirectory } from './support/fixtures.mjs';
 import { bootstrapFromEnv, applyApiKeysFromEnv } from '../src/bootstrap.mjs';
 
 test('environment keys replace saved keys without changing research or repository settings', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-keys-'));
-  const store = openStore(directory);
+  const { store, cleanup } = storeFixture('researchforge-keys-');
   try {
     const settings = { provider: 'nvidia', endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', model: 'saved-model', brief: 'Market research forever', enabled: true, mode: 'continuous', dailyLimit: 0 };
     store.set('orchestrator', JSON.stringify(settings));
@@ -26,14 +23,12 @@ test('environment keys replace saved keys without changing research or repositor
     assert.equal(store.getSecret('jules'), 'new-jules-key');
     assert.equal(store.getSecret('orchestrator'), 'new-nvidia-key');
   } finally {
-    store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });
 
 test('NVIDIA environment key initializes a disabled provider and never replaces another provider key', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-provider-key-'));
-  const store = openStore(directory);
+  const { store, cleanup } = storeFixture('researchforge-provider-key-');
   try {
     applyApiKeysFromEnv(store, { NVIDIA_API_KEY: 'nvidia-key' });
     assert.equal(store.getSecret('orchestrator'), 'nvidia-key');
@@ -43,13 +38,12 @@ test('NVIDIA environment key initializes a disabled provider and never replaces 
     assert.equal(applyApiKeysFromEnv(store, { NVIDIA_API_KEY: 'other-nvidia-key' }), false);
     assert.equal(store.getSecret('orchestrator'), 'compatible-key');
   } finally {
-    store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });
 
 test('complete .env.local values verify and persist setup across restarts', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-bootstrap-'));
+  const { directory, cleanup } = temporaryDirectory('researchforge-bootstrap-');
   let store = openStore(directory);
   const source = { name: 'sources/verified', githubRepo: { owner: 'example-owner', repo: 'example-research-repo', branches: [{ displayName: 'main' }] } };
   const jules = { sources: async () => [source], source: async () => source };
@@ -77,6 +71,6 @@ test('complete .env.local values verify and persist setup across restarts', asyn
     assert.equal(store.binding().github_repo, 'example-research-repo');
   } finally {
     store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });

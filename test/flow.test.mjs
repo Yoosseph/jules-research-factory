@@ -1,16 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { openStore } from '../src/db.mjs';
 import { createApp } from '../src/app.mjs';
 import { initializeFlow, recordPacket, flowSnapshot } from '../src/flow.mjs';
 import { layout } from '../src/ui.mjs';
+import { listen, storeFixture, writePromptFixture } from './support/fixtures.mjs';
 
 test('flow retains actual conversations, scopes tasks, and redacts saved credentials', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'research-flow-'));
-  const store = openStore(directory);
+  const { store, cleanup } = storeFixture('research-flow-');
   try {
     initializeFlow(store);
     store.saveBinding({ owner: 'owner', repo: 'repo', fullName: 'owner/repo', githubId: '1', branch: 'main', sourceName: 'sources/repo' });
@@ -28,14 +24,12 @@ test('flow retains actual conversations, scopes tasks, and redacts saved credent
     store.db.prepare("UPDATE projects SET status='completed' WHERE id=?").run(first.id);
     store.clearProjects('finished');
     assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM agent_packets WHERE project_id=?').get(first.id).n, 0);
-  } finally { store.db.close(); if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true }); }
+  } finally { cleanup(); }
 });
 
 test('flow stream publishes new packets and closes cleanly; theme and notice controls remain accessible', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'research-stream-'));
-  const store = openStore(directory);
-  const promptPath = join(directory, 'prompt.txt');
-  writeFileSync(promptPath, readFileSync(new URL('../prompt-template.txt', import.meta.url)));
+  const { directory, store, cleanup } = storeFixture('research-stream-');
+  const promptPath = writePromptFixture(directory);
   store.saveBinding({ owner: 'owner', repo: 'repo', fullName: 'owner/repo', githubId: '1', branch: 'main', sourceName: 'sources/repo' });
   store.set('configured', '1');
   // Keep the startup capacity check pending until shutdown, without using a
@@ -49,8 +43,7 @@ test('flow stream publishes new packets and closes cleanly; theme and notice con
     githubFactory: () => { throw new Error('This test must not contact GitHub.'); },
     orchestratorFactory: () => { throw new Error('This test must not contact a model provider.'); }
   });
-  await new Promise(done => app.server.listen(0, '127.0.0.1', done));
-  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const base = await listen(app);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   let reader;
@@ -102,14 +95,12 @@ test('flow stream publishes new packets and closes cleanly; theme and notice con
     await app.schedule();
     await serverClosed;
     assert.equal(capacityCheckFinished, true);
-    store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    cleanup();
   }
 });
 
 test('completed packets link only to the validated project report destination', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'research-products-'));
-  const store = openStore(directory);
+  const { store, cleanup } = storeFixture('research-products-');
   try {
     initializeFlow(store);
     store.saveBinding({ owner: 'owner', repo: 'repo', fullName: 'owner/repo', githubId: '1', branch: 'main', sourceName: 'sources/repo' });
@@ -126,5 +117,5 @@ test('completed packets link only to the validated project report destination', 
     }
     save('https://github.com/owner/repo/pull/42', null);
     assert.equal(flowSnapshot(store).packets.find(p => p.kind === 'report').productUrl, undefined);
-  } finally { store.db.close(); if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true }); }
+  } finally { cleanup(); }
 });

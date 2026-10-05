@@ -1,19 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { openStore } from '../src/db.mjs';
 import { createApp } from '../src/app.mjs';
+import { closeApp, listen, storeFixture, writePromptFixture } from './support/fixtures.mjs';
 
 test('new users receive an introduction with working setup links and locally served design assets', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-ui-'));
-  const store = openStore(directory);
-  const promptPath = join(directory, 'prompt.txt');
-  writeFileSync(promptPath, readFileSync(new URL('../prompt-template.txt', import.meta.url)));
+  const { directory, store, cleanup } = storeFixture('researchforge-ui-');
+  const promptPath = writePromptFixture(directory);
   const app = createApp(store, { promptPath });
-  await new Promise(done => app.server.listen(0, '127.0.0.1', done));
-  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const base = await listen(app);
   try {
     const response = await fetch(base);
     assert.equal(response.status, 200);
@@ -40,8 +34,7 @@ test('new users receive an introduction with working setup links and locally ser
     assert.match(missingSource, /href="\/setup\?rebind=1">Choose an available repository/);
     assert.match(missingSource, /href="https:\/\/jules.google.com\/"/);
   } finally {
-    app.close();
-    store.db.close();
-    if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true });
+    await closeApp(app);
+    cleanup();
   }
 });

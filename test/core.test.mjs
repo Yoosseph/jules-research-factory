@@ -1,16 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { openStore } from '../src/db.mjs';
+import { storeFixture } from './support/fixtures.mjs';
 import { verifyRepository, verifyReservations, verifyProjectBinding, validatePullRequest, researchPrompt } from '../src/core.mjs';
-
-function storeForTest() {
-  const directory = mkdtempSync(join(tmpdir(), 'researchforge-test-'));
-  const store = openStore(directory);
-  return { store, cleanup() { store.db.close(); if (resolve(directory).startsWith(resolve(tmpdir()) + sep)) rmSync(directory, { recursive: true, force: true }); } };
-}
 
 const source = { name: 'sources/authoritative-123', githubRepo: { owner: 'example-owner', repo: 'example-research-repo', branches: [{ displayName: 'main' }] } };
 const github = {
@@ -65,7 +56,7 @@ test('private repository access failures identify the token setting to check', a
 });
 
 test('folder numbers reserve atomically above gaps and local reservations', () => {
-  const { store, cleanup } = storeForTest();
+  const { store, cleanup } = storeFixture();
   try {
     store.saveBinding({ owner: 'example-owner', repo: 'example-research-repo', fullName: 'example-owner/example-research-repo', githubId: '9876', branch: 'main', sourceName: source.name });
     store.replaceRemoteFolders([{ name: '1-OpenFE', number: 1 }, { name: '4-Concept-Drift', number: 4 }, { name: '8-Missing-Data', number: 8 }]);
@@ -81,7 +72,7 @@ test('folder numbers reserve atomically above gaps and local reservations', () =
 });
 
 test('bulk clearing removes only selected terminal records and preserves numbering', () => {
-  const { store, cleanup } = storeForTest();
+  const { store, cleanup } = storeFixture();
   try {
     store.saveBinding({ owner: 'example-owner', repo: 'example-research-repo', fullName: 'example-owner/example-research-repo', githubId: '9876', branch: 'main', sourceName: source.name });
     const items = store.reserve(['Finished PR', 'Finished without PR', 'Reservation', 'Failed', 'Blocked', 'Rejected PR', 'Stopped', 'Running', 'Queued']);

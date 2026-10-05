@@ -39,8 +39,8 @@ export function summarizeActivity(activity) {
 
 export function saveActivities(store, projectId, sessionName, activities) {
   const insert = store.db.prepare('INSERT OR IGNORE INTO jules_activities(name,project_id,kind,originator,summary,detail,created_at) VALUES (?,?,?,?,?,?,?)');
+  const prefix = `${sessionName}/activities/`;
   for (const activity of activities) {
-    const prefix = `${sessionName}/activities/`;
     if (typeof activity.name !== 'string' || !activity.name.startsWith(prefix) || !activity.name.slice(prefix.length) || activity.name.slice(prefix.length).includes('/')) continue;
     const item = summarizeActivity(activity);
     insert.run(item.name, projectId, item.kind, item.originator, item.summary, item.detail, item.createdAt);
