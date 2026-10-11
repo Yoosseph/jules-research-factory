@@ -57,6 +57,32 @@ export function openStore(directory = '.data') {
   const activities = projectId => db.prepare('SELECT * FROM jules_activities WHERE project_id=? ORDER BY created_at DESC,name DESC').all(projectId);
   const latestActivity = projectId => db.prepare('SELECT * FROM jules_activities WHERE project_id=? ORDER BY created_at DESC,name DESC LIMIT 1').get(projectId);
   const autoReplies = projectId => db.prepare('SELECT * FROM jules_auto_replies WHERE project_id=? ORDER BY created_at DESC LIMIT 5').all(projectId);
+  const autoReply = activityName => db.prepare('SELECT * FROM jules_auto_replies WHERE activity_name=?').get(activityName);
+  const latestPlan = projectId => db.prepare("SELECT * FROM jules_activities WHERE project_id=? AND kind='plan' AND summary='Plan generated' ORDER BY created_at DESC,name DESC LIMIT 1").get(projectId);
+  const latestQuestion = projectId => db.prepare("SELECT * FROM jules_activities WHERE project_id=? AND kind='message' AND originator='agent' ORDER BY created_at DESC,name DESC LIMIT 1").get(projectId);
+  const pageRows = (table, condition, args, order, requestedPage = 1, pageSize = 25) => {
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM ${table} ${condition}`).get(...args).n;
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(pages, Math.max(1, Number.isSafeInteger(Number(requestedPage)) ? Number(requestedPage) : 1));
+    const items = db.prepare(`SELECT * FROM ${table} ${condition} ORDER BY ${order} LIMIT ? OFFSET ?`).all(...args, pageSize, (page - 1) * pageSize);
+    return { items, total, pages, page, pageSize };
+  };
+  const projectHistory = page => pageRows('projects', '', [], 'number_generation DESC,folder_number DESC', page);
+  const activityHistory = (projectId, page) => pageRows('jules_activities', 'WHERE project_id=?', [projectId], 'created_at DESC,name DESC', page);
+  const projectSummary = () => {
+    const statuses = Object.fromEntries(db.prepare('SELECT status,COUNT(*) AS n FROM projects GROUP BY status').all().map(row => [row.status, row.n]));
+    const count = values => values.reduce((n, status) => n + (statuses[status] || 0), 0);
+    return { statuses, total: count(Object.keys(statuses)), active: count(['queued', 'launching', 'running', 'stopping']),
+      waiting: db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status='running' AND jules_state IN ('AWAITING_PLAN_APPROVAL','AWAITING_USER_FEEDBACK','PAUSED')").get().n,
+      finished: count(['pr_validated', 'completed', 'completed_no_pr', 'failed', 'pr_rejected', 'stopped']),
+      clearable: {
+        finished: count(['pr_validated', 'completed', 'completed_no_pr']),
+        reserved: db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status='reserved' AND jules_session_name IS NULL").get().n,
+        failed: count(['failed', 'blocked', 'pr_rejected']), stopped: count(['stopped'])
+      } };
+  };
+  const flowProjects = () => db.prepare("SELECT * FROM projects ORDER BY CASE WHEN status IN ('queued','launching','running','stopping') THEN 0 ELSE 1 END,updated_at DESC LIMIT 100").all();
+  const activeProjectCount = () => db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('queued','launching','running','stopping')").get().n;
   const remoteFolders = () => db.prepare('SELECT * FROM remote_folders ORDER BY number,name').all();
   const currentGeneration = () => Number(get('project_number_generation') ?? 0);
   const nextProjectNumber = () => {
@@ -80,7 +106,7 @@ export function openStore(directory = '.data') {
     const number = Number(value);
     if (!Number.isSafeInteger(number) || number < 1 || number > 1000000) throw new Error('Enter a next project number from 1 to 1,000,000.');
     return transaction(db, () => {
-      const pending = db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('reserved','queued','launching','running')").get().n;
+      const pending = db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('reserved','queued','launching','running','stopping','stopping')").get().n;
       if (pending) throw new Error('Clear reserved projects and finish or stop active tasks before changing the project number.');
       set('project_number_generation', currentGeneration() + 1);
       set('next_project_number', number);
@@ -160,5 +186,5 @@ export function openStore(directory = '.data') {
       return selected.length;
     });
   };
-  return { db, set, get, setSecret, getSecret, binding, saveBinding, log, projects, project, activities, latestActivity, autoReplies, remoteFolders, nextProjectNumber, setNextProjectNumber, replaceRemoteFolders, reserve, removeReservation, clearProjects };
+  return { db, set, get, setSecret, getSecret, binding, saveBinding, log, projects, project, activities, latestActivity, autoReplies, autoReply, latestPlan, latestQuestion, projectHistory, activityHistory, projectSummary, flowProjects, activeProjectCount, remoteFolders, nextProjectNumber, setNextProjectNumber, replaceRemoteFolders, reserve, removeReservation, clearProjects };
 }

@@ -220,7 +220,7 @@ test('setup, reserve, preflight, launch and PR validation use one verified desti
     await app.pollSessions();
     assert.equal(store.project(changed.id).status, 'pr_validated');
     github.pullFiles = async () => [{ filename: 'README.md' }];
-    await app.pollSessions();
+    await post(`/projects/${changed.id}/refresh-report`, { csrf: token });
     assert.equal(store.project(changed.id).status, 'pr_rejected');
   } finally {
     await closeApp(app);

@@ -49,7 +49,7 @@ export function createResearchCoordinator(store, services) {
     const settings = orchestratorSettings();
     return settings.enabled && settings.mode === 'continuous';
   };
-  const { autoReplyToFeedback, autoApprovePlan } = createAutoReplies(store, { continuous, orchestratorSettings, modelClient });
+  const { autoReplyToFeedback, autoApprovePlan } = createAutoReplies(store, { continuous, orchestratorSettings, modelClient, isClosed: () => closed });
 
   function resetCooldown() {
     store.set('orchestratorRetryAt', '');
@@ -66,7 +66,7 @@ export function createResearchCoordinator(store, services) {
     store.log('orchestrator_waiting', error.message);
   }
   async function occupiedSlots(includeQueued = false) {
-    const projects = store.projects().filter(project => ['launching', 'running', ...(includeQueued ? ['queued'] : [])].includes(project.status));
+    const projects = store.db.prepare(`SELECT * FROM projects WHERE status IN ('launching','running','stopping'${includeQueued ? ",'queued'" : ''})`).all();
     const names = new Set(projects.map(project => project.jules_session_name).filter(Boolean));
     const client = julesFactory(julesKey());
     // Include tasks started outside this app; Jules owns the account-wide quota.
@@ -104,8 +104,11 @@ export function createResearchCoordinator(store, services) {
     let submitted = false;
     try {
       await checkedProjects([projectId], ['queued']);
+      if (closed) return;
       const current = store.project(projectId);
-      store.db.prepare('UPDATE projects SET status=?,updated_at=? WHERE id=? AND status=?').run('launching', dateNow(), projectId, 'queued');
+      verifyProjectBinding([current], store.binding());
+      const claimed = store.db.prepare('UPDATE projects SET status=?,updated_at=? WHERE id=? AND status=?').run('launching', dateNow(), projectId, 'queued');
+      if (claimed.changes !== 1) return;
       store.log('launching', `Starting ${current.folder} in ${binding.github_full_name}`, projectId);
       const prompt = researchPrompt(current, binding, defaults(store), readPromptTemplate(promptPath));
       store.db.prepare('UPDATE projects SET prompt_text=? WHERE id=?').run(prompt, projectId);
@@ -127,7 +130,8 @@ export function createResearchCoordinator(store, services) {
       // Only a definite rejection or a failure before submission can be retried.
       const rejected = [401, 403, 429].includes(error.status) || error.code === 'RESOURCE_EXHAUSTED';
       const retryable = rejected || (!submitted && error.status >= 500);
-      store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run(retryable ? 'queued' : 'blocked', error.message, dateNow(), projectId);
+      const changed = store.db.prepare("UPDATE projects SET status=?,error=?,updated_at=? WHERE id=? AND status IN ('queued','launching')").run(retryable ? 'queued' : 'blocked', error.message, dateNow(), projectId);
+      if (!changed.changes) return;
       store.log(retryable ? 'launch_deferred' : 'launch_blocked', error.message, projectId);
       recordPacket(store, { projectId, from: 'jules', to: 'coordinator', kind: 'error', title: retryable ? 'Launch deferred' : 'Launch blocked', content: error.message });
       deferResearch(error);
@@ -157,7 +161,7 @@ export function createResearchCoordinator(store, services) {
     if (!manual) {
       const last = Date.parse(store.get('orchestratorLastAttempt') ?? '');
       if (settings.mode !== 'continuous' && Number.isFinite(last) && Date.now() - last < settings.intervalHours * 3600000) return null;
-      const pending = store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('reserved','queued','launching','running')").get().n;
+      const pending = store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('reserved','queued','launching','running','stopping')").get().n;
       if (settings.mode !== 'continuous' && pending) return null;
     }
     orchestratorBusy = true;
@@ -171,7 +175,7 @@ export function createResearchCoordinator(store, services) {
         store.set('orchestratorLastAttempt', dateNow());
         project = null;
         const binding = await refresh();
-        const recentTopics = store.projects().slice(0, 30).map(project => project.topic);
+        const recentTopics = store.db.prepare('SELECT topic FROM projects ORDER BY number_generation DESC,folder_number DESC LIMIT 30').all().map(project => project.topic);
         const planningClient = modelClient();
         const proposal = await proposeResearch(planningClient, { brief: settings.brief, repository: binding.fullName, recentTopics });
         if (closed) return null;
@@ -235,16 +239,23 @@ export function createResearchCoordinator(store, services) {
     if (pollingBusy) return;
     pollingBusy = true;
     try {
-      const validated = store.db.prepare("SELECT * FROM projects WHERE status='pr_validated'").all();
+      // Open reports are checked every five minutes; closed/merged reports daily.
+      // Limit each batch so a large library cannot monopolize provider traffic.
+      const validated = store.db.prepare(`SELECT id FROM projects WHERE status='pr_validated' AND binding_identity=? AND
+        (pr_checked_at IS NULL OR pr_checked_at <= CASE WHEN pr_status IN ('merged','closed') THEN ? ELSE ? END)
+        ORDER BY COALESCE(pr_checked_at,'') LIMIT 10`).all(
+        store.binding() ? bindingIdentity(store.binding()) : '', new Date(Date.now() - 86400000).toISOString(), new Date(Date.now() - 300000).toISOString());
       const running = store.db.prepare("SELECT * FROM projects WHERE status='running'").all();
       for (const project of running) {
         try {
           const jules = julesFactory(julesKey());
           const session = await jules.session(project.jules_session_name);
+          if (closed || store.project(project.id)?.status !== 'running') continue;
           if (session.state && session.state !== project.jules_state) recordPacket(store, { projectId: project.id, from: 'jules', to: 'coordinator', kind: 'state', title: 'Jules state changed', content: session.state.replaceAll('_', ' ') });
           store.db.prepare('UPDATE projects SET jules_state=?,jules_polled_at=? WHERE id=?').run(session.state || 'STATE_UNSPECIFIED', dateNow(), project.id);
           try {
             const activities = await jules.activities(project.jules_session_name);
+            if (closed || store.project(project.id)?.status !== 'running') continue;
             saveActivities(store, project.id, project.jules_session_name, activities);
             store.db.prepare('UPDATE projects SET activity_error=NULL WHERE id=?').run(project.id);
             if (session.state === 'AWAITING_PLAN_APPROVAL') await autoApprovePlan(project, jules, activities);
@@ -253,6 +264,7 @@ export function createResearchCoordinator(store, services) {
             store.db.prepare('UPDATE projects SET activity_error=? WHERE id=?').run(activityError.message, project.id);
             store.log('activity_poll_error', activityError.message, project.id);
           }
+          if (closed || store.project(project.id)?.status !== 'running') continue;
           if (session.state === 'FAILED') {
             store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run('failed', 'Jules reported a failed session.', dateNow(), project.id);
             store.log('session_failed', 'Jules reported a failed session.', project.id);
@@ -265,13 +277,16 @@ export function createResearchCoordinator(store, services) {
             const binding = store.binding();
             verifyProjectBinding([project], binding);
             const checked = await validatePullRequest(prUrl, project, binding, githubFactory(githubToken()));
-            store.db.prepare('UPDATE projects SET status=?,pr_url=?,pr_status=?,updated_at=? WHERE id=?').run('pr_validated', prUrl, checked.status, dateNow(), project.id);
+            if (closed || store.project(project.id)?.status !== 'running') continue;
+            store.db.prepare('UPDATE projects SET status=?,pr_url=?,pr_status=?,pr_checked_at=?,pr_head_sha=?,pr_base_sha=?,pr_file_count=?,updated_at=? WHERE id=?')
+              .run('pr_validated', prUrl, checked.status, dateNow(), checked.headSha, checked.baseSha, checked.files, dateNow(), project.id);
             store.log('pr_validated', `Pull request validated for ${project.folder}`, project.id);
             recordPacket(store, { projectId: project.id, from: 'jules', to: 'repository', kind: 'report', title: 'Report pull request validated', content: prUrl });
           }
         } catch (error) {
+          if (closed || store.project(project.id)?.status !== 'running') continue;
           if (error instanceof BindingError) {
-            store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run('pr_rejected', error.message, dateNow(), project.id);
+            store.db.prepare('UPDATE projects SET status=?,pr_status=NULL,pr_head_sha=NULL,pr_base_sha=NULL,pr_file_count=NULL,error=?,updated_at=? WHERE id=?').run('pr_rejected', error.message, dateNow(), project.id);
             store.log('pr_rejected', error.message, project.id);
           } else store.log('poll_error', error.message, project.id);
         }
@@ -287,18 +302,9 @@ export function createResearchCoordinator(store, services) {
         }
       }
       for (const project of validated) {
-        try {
-          const binding = store.binding();
-          if (project.binding_identity !== bindingIdentity(binding)) continue;
-          verifyProjectBinding([project], binding);
-          const checked = await validatePullRequest(project.pr_url, project, binding, githubFactory(githubToken()));
-          store.db.prepare('UPDATE projects SET pr_status=?,updated_at=? WHERE id=?').run(checked.status, dateNow(), project.id);
-        } catch (error) {
-          if (error instanceof BindingError) {
-            store.db.prepare('UPDATE projects SET status=?,error=?,updated_at=? WHERE id=?').run('pr_rejected', error.message, dateNow(), project.id);
-            store.log('pr_rejected', error.message, project.id);
-          } else store.log('pr_status_error', error.message, project.id);
-        }
+        if (closed) break;
+        try { await refreshReport(project.id); }
+        catch (error) { store.log('pr_status_error', error.message, project.id); }
       }
     } finally {
       pollingBusy = false;
@@ -306,9 +312,77 @@ export function createResearchCoordinator(store, services) {
     }
   }
 
+  async function refreshReport(projectId, { force = false } = {}) {
+    const project = store.project(projectId), binding = store.binding();
+    if (!project || project.status !== 'pr_validated' || !binding || project.binding_identity !== bindingIdentity(binding)) throw new Error('This report does not belong to the currently connected repository and branch.');
+    // Persist attempts too, so an unavailable provider is not hammered every tick.
+    store.db.prepare('UPDATE projects SET pr_checked_at=? WHERE id=?').run(dateNow(), projectId);
+    try {
+      const checked = await validatePullRequest(project.pr_url, project, binding, githubFactory(githubToken()), { useCache: !force });
+      if (closed || store.project(projectId)?.status !== 'pr_validated') return;
+      store.db.prepare('UPDATE projects SET pr_status=?,pr_head_sha=?,pr_base_sha=?,pr_file_count=?,updated_at=? WHERE id=?')
+        .run(checked.status, checked.headSha, checked.baseSha, checked.files, dateNow(), projectId);
+    } catch (error) {
+      if (error instanceof BindingError && store.project(projectId)?.status === 'pr_validated') {
+        store.db.prepare("UPDATE projects SET status='pr_rejected',pr_status=NULL,pr_head_sha=NULL,pr_base_sha=NULL,pr_file_count=NULL,error=?,updated_at=? WHERE id=?").run(error.message, dateNow(), projectId);
+        store.log('pr_rejected', error.message, projectId);
+      }
+      throw error;
+    }
+  }
+
+  function matchesLaunch(project, session) {
+    const binding = store.binding();
+    return !!project.prompt_text && session.prompt === project.prompt_text &&
+      session.sourceContext?.source === binding.jules_source_id &&
+      session.sourceContext?.githubRepoContext?.startingBranch === binding.base_branch;
+  }
+
+  function recoverableProject(projectId) {
+    const project = store.project(projectId);
+    if (!project || project.status !== 'blocked' || project.jules_session_name) throw new Error('Only an interrupted or blocked launch without a saved session can be recovered.');
+    verifyProjectBinding([project], store.binding());
+    return project;
+  }
+
+  async function inspectRecovery(projectId) {
+    const project = recoverableProject(projectId);
+    const sessions = await julesFactory(julesKey()).sessions();
+    return { project, sessions: sessions.filter(session => matchesLaunch(project, session)) };
+  }
+
+  async function recoverProject(projectId, { action, sessionName, noSession = false }) {
+    const project = recoverableProject(projectId);
+    const jules = julesFactory(julesKey());
+    await verifyBinding(store, deps());
+    if (action === 'attach') {
+      const session = await jules.session(sessionName);
+      if (session?.name !== sessionName || !/^sessions\/[a-zA-Z0-9_-]+$/.test(sessionName ?? '') || !matchesLaunch(project, session)) {
+        throw new Error('This Jules session does not match the saved prompt, repository and branch.');
+      }
+      if (store.db.prepare('SELECT id FROM projects WHERE jules_session_name=? AND id<>?').get(sessionName, projectId)) throw new Error('This Jules session is already connected to another project.');
+      recoverableProject(projectId);
+      const url = /^https:\/\/jules\.google\.com\//.test(session.url ?? '') ? session.url : null;
+      const changed = store.db.prepare("UPDATE projects SET status='running',jules_state=?,jules_session_name=?,jules_session_url=?,jules_polled_at=NULL,error=NULL,updated_at=? WHERE id=? AND status='blocked' AND jules_session_name IS NULL")
+        .run(session.state || 'QUEUED', sessionName, url, dateNow(), projectId);
+      if (!changed.changes) throw new Error('The project changed during recovery. Refresh and try again.');
+      store.log('session_recovered', `Reconnected ${sessionName} to ${project.folder}`, projectId);
+    } else if (action === 'retry') {
+      if (!noSession) throw new Error('Inspect Jules and confirm that no existing session is doing this task before retrying.');
+      const sessions = await jules.sessions();
+      if (sessions.some(session => matchesLaunch(project, session))) throw new Error('Jules already has a matching session. Reconnect it instead of creating another.');
+      await checkedProjects([projectId], ['blocked']);
+      recoverableProject(projectId);
+      const changed = store.db.prepare("UPDATE projects SET status='reserved',jules_state=NULL,error=NULL,updated_at=? WHERE id=? AND status='blocked' AND jules_session_name IS NULL").run(dateNow(), projectId);
+      if (!changed.changes) throw new Error('The project changed during recovery. Refresh and try again.');
+      store.log('launch_recovered', `Returned ${project.folder} to launch review after checking Jules`, projectId);
+    } else throw new Error('Choose reconnect or retry.');
+  }
+
   // An interrupted request may have reached Jules; never retry it blindly.
   store.db.prepare("UPDATE projects SET status='blocked',error='Launch was interrupted. Inspect Jules before retrying.',updated_at=? WHERE status='launching'").run(dateNow());
   store.db.prepare("UPDATE jules_auto_replies SET status='uncertain',error='Automatic response was interrupted. Inspect Jules before replying again.',updated_at=? WHERE status='sending'").run(dateNow());
+  store.db.prepare("UPDATE projects SET error='Stopping was interrupted. Inspect Jules, then use Stop task again if needed.',updated_at=? WHERE status='stopping'").run(dateNow());
   const timer = setInterval(() => { void pollSessions(); void schedule(); void runOrchestrator(); }, 30000);
   timer.unref();
   void schedule();
@@ -318,7 +392,7 @@ export function createResearchCoordinator(store, services) {
 
   return {
     launchResearchProject, launchResearchBatch, pollSessions, schedule, runOrchestrator,
-    refresh, checkedProjects, resetCooldown, coolingDown, orchestratorUsage,
+    refresh, refreshReport, inspectRecovery, recoverProject, checkedProjects, resetCooldown, coolingDown, orchestratorUsage,
     snapshot: () => ({ ...flowSnapshot(store, { modelBusy: modelRequests > 0 }), capacityCheckedAt, accountActive }),
     projectSnapshot: projectId => flowSnapshot(store, { projectId, modelBusy: modelRequests > 0 }),
     close() { closed = true; clearInterval(timer); },

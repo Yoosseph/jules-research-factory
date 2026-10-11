@@ -1,4 +1,3 @@
-const activeStatuses = ['queued', 'launching', 'running'];
 const text = value => {
   const content = String(value ?? '');
   return content.length > 20000 ? `${content.slice(0, 20000)}\n[Message truncated to 20,000 characters.]` : content;
@@ -10,6 +9,7 @@ function redactor(store) {
 }
 
 function reportUrl(project) {
+  if (project?.status !== 'pr_validated') return;
   if (!['open', 'merged', 'closed'].includes(project?.pr_status)) return;
   try {
     const url = new URL(project.pr_url);
@@ -37,8 +37,8 @@ export function recordPacket(store, { projectId = null, from = 'coordinator', to
 
 export function flowSnapshot(store, { modelBusy = false, projectId = null } = {}) {
   const settings = JSON.parse(store.get('orchestrator') ?? '{}');
-  const projects = store.projects().sort((a, b) => Number(activeStatuses.includes(b.status)) - Number(activeStatuses.includes(a.status)) || b.updated_at.localeCompare(a.updated_at));
-  const selected = projectId ? projects.filter(p => p.id === projectId) : projects;
+  const projects = projectId ? [store.project(projectId)].filter(Boolean) : store.flowProjects();
+  const selected = projects;
   const hasPackets = !!store.db.prepare("SELECT name FROM sqlite_master WHERE name='agent_packets'").get();
   const packets = hasPackets ? store.db.prepare(`SELECT id,project_id AS projectId,from_node AS "from",to_node AS "to",kind,title,content,created_at AS createdAt FROM agent_packets ${projectId ? 'WHERE project_id=?' : ''} ORDER BY id DESC LIMIT 120`).all(...(projectId ? [projectId] : [])).map(p => ({ ...p, id: `packet:${p.id}`, observed: true })) : [];
   const activities = store.db.prepare(`SELECT name,project_id AS projectId,kind,originator,summary,detail,created_at AS createdAt FROM jules_activities ${projectId ? 'WHERE project_id=?' : ''} ORDER BY created_at DESC,name DESC LIMIT 120`).all(...(projectId ? [projectId] : []));
@@ -55,6 +55,7 @@ export function flowSnapshot(store, { modelBusy = false, projectId = null } = {}
   const byProject = new Map(projects.map(project => [project.id, project]));
   for (const packet of packets) {
     packet.content = redact(packet.content); packet.title = redact(packet.title);
+    if (packet.projectId && !byProject.has(packet.projectId)) byProject.set(packet.projectId, store.project(packet.projectId));
     const project = byProject.get(packet.projectId);
     if (['report', 'completed'].includes(packet.kind)) {
       const destination = reportUrl(project);
@@ -67,7 +68,7 @@ export function flowSnapshot(store, { modelBusy = false, projectId = null } = {}
     serverTime: new Date().toISOString(), model: settings.model || 'Not connected', provider: settings.provider || 'nvidia', enabled: !!settings.enabled,
     modelState: modelBusy ? 'Planning or replying' : retryAt && Date.parse(retryAt) > Date.now() ? 'Waiting to retry' : settings.enabled ? 'Ready' : 'Off',
     error: error ? redact(error) : null, retryAt, repository: store.binding()?.github_full_name || 'No repository',
-    capacity: Number(store.get('concurrency') || 10), active: projects.filter(p => activeStatuses.includes(p.status)).length,
+    capacity: Number(store.get('concurrency') || 10), active: store.activeProjectCount(),
     projects: selected.slice(0, 100).map(p => ({ id: p.id, folder: redact(p.folder), topic: redact(p.topic), status: p.status, state: p.jules_state || p.status, updatedAt: p.jules_polled_at || p.updated_at, error: p.activity_error || p.error ? redact(p.activity_error || p.error) : null })),
     packets: packets.slice(0, 160), pollSeconds: 30
   };

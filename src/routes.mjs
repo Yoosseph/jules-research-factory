@@ -6,6 +6,7 @@ import { NVIDIA_ENDPOINT, NVIDIA_MODEL, validateOrchestratorSettings } from './o
 import { welcomePage } from './landing-ui.mjs';
 import { recordPacket } from './flow.mjs';
 import { flowPage } from './flow-ui.mjs';
+import { recoveryPage } from './recovery-ui.mjs';
 import { defaults, parseDefaults, saveDefaults } from './settings.mjs';
 import { html, redirect, safeEqual, bodyParams, idsFrom, messageUrl, selectionUrl, serveAsset } from './http.mjs';
 
@@ -57,7 +58,8 @@ export function createRequestHandler(store, services, coordinator, flowStream, c
         if (path === '/welcome') return html(response, welcomePage({ configured: store.get('configured') === '1' && !!store.binding() }));
         if (path === '/') {
           if (store.get('configured') !== '1' || !store.binding()) return html(response, welcomePage());
-          return html(response, dashboardPage({ binding: store.binding(), folders: store.remoteFolders(), projects: store.projects(), csrfToken, defaults: defaults(store), nextProjectNumber: store.nextProjectNumber(), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
+          const pagination = store.projectHistory(url.searchParams.get('page'));
+          return html(response, dashboardPage({ binding: store.binding(), folders: store.remoteFolders(), projects: pagination.items, pagination, summary: store.projectSummary(), csrfToken, defaults: defaults(store), nextProjectNumber: store.nextProjectNumber(), message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
         }
         if (path === '/setup') return setupView(response, { rebind: url.searchParams.has('rebind'), defaults: url.searchParams.has('defaults'), error: url.searchParams.get('error') });
         if (path === '/setup/guide') return html(response, guidePage(csrfToken));
@@ -72,8 +74,9 @@ export function createRequestHandler(store, services, coordinator, flowStream, c
         }
         if (path === '/activity') {
           if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
-          const projects = store.projects();
-          return html(response, activityPage({ projects, latest: new Map(projects.map(project => [project.id, store.latestActivity(project.id)])), defaults: defaults(store) }));
+          const pagination = store.projectHistory(url.searchParams.get('page'));
+          const projects = pagination.items;
+          return html(response, activityPage({ projects, pagination, summary: store.projectSummary(), latest: new Map(projects.map(project => [project.id, store.latestActivity(project.id)])), defaults: defaults(store) }));
         }
         if (path === '/activity/settings') {
           if (store.get('configured') !== '1' || !store.binding()) return redirect(response, '/setup');
@@ -83,7 +86,19 @@ export function createRequestHandler(store, services, coordinator, flowStream, c
         if (/^\/projects\/[0-9a-f-]{36}$/i.test(path)) {
           const project = store.project(path.slice('/projects/'.length));
           if (!project) return html(response, layout('Not found', '<main class="narrow"><h1>Project not found</h1></main>'), 404);
-          return html(response, projectPage({ project, activities: store.activities(project.id), autoReplies: store.autoReplies(project.id), csrfToken, message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
+          const pagination = store.activityHistory(project.id, url.searchParams.get('page'));
+          const latestPlan = store.latestPlan(project.id), latestAgentMessage = store.latestQuestion(project.id);
+          const autoReplies = [latestPlan, latestAgentMessage].filter(Boolean).map(item => store.autoReply(item.name)).filter(Boolean);
+          return html(response, projectPage({ project, activities: pagination.items, pagination, latestPlan, latestAgentMessage, autoReplies, csrfToken, message: url.searchParams.get('message'), error: url.searchParams.get('error') }));
+        }
+        const recovery = path.match(/^\/projects\/([0-9a-f-]{36})\/recovery$/i);
+        if (recovery) {
+          const project = store.project(recovery[1]);
+          if (!project || project.status !== 'blocked' || project.jules_session_name) throw new Error('This project has no blocked launch to recover.');
+          try {
+            const result = await coordinator.inspectRecovery(project.id);
+            return html(response, recoveryPage({ ...result, csrfToken }));
+          } catch (error) { return html(response, recoveryPage({ project, csrfToken, error: error.message }), 422); }
         }
         if (path === '/preflight') {
           if (!store.binding()) return redirect(response, '/setup');
@@ -168,7 +183,7 @@ export function createRequestHandler(store, services, coordinator, flowStream, c
         const token = form.get('githubToken')?.trim() || githubToken();
         const prefill = { owner, repo, branch, sourceName };
         try {
-          if (store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('queued','launching','running')").get().n) throw new BindingError('Finish active Jules tasks before changing the repository.');
+          if (store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status IN ('queued','launching','running','stopping')").get().n) throw new BindingError('Finish active Jules tasks before changing the repository.');
           const result = await verifyRepository({ julesKey: julesKey(), githubToken: token, owner, repo, branch, sourceName: selected?.name }, { jules: julesFactory(julesKey()), github: githubFactory(token) });
           store.setSecret('github', token);
           store.saveBinding(result);
@@ -250,18 +265,42 @@ export function createRequestHandler(store, services, coordinator, flowStream, c
         return redirect(response, messageUrl('/', `${count} ${label} local project${count === 1 ? '' : 's'} cleared.`));
       }
       const sessionAction = path.match(/^\/projects\/([0-9a-f-]{36})\/(approve-plan|reply)$/i);
+      const recoveryAction = path.match(/^\/projects\/([0-9a-f-]{36})\/recovery$/i);
+      if (recoveryAction) {
+        const projectId = recoveryAction[1];
+        try {
+          await coordinator.recoverProject(projectId, { action: form.get('action'), sessionName: form.get('sessionName'), noSession: form.get('noSession') === '1' });
+          return redirect(response, form.get('action') === 'retry' ? selectionUrl([projectId]) : messageUrl(`/projects/${projectId}`, 'Existing Jules session reconnected. Its next update will appear here.'));
+        } catch (error) { return html(response, recoveryPage({ project: store.project(projectId) || { id: projectId }, csrfToken, error: error.message }), 422); }
+      }
+      const reportAction = path.match(/^\/projects\/([0-9a-f-]{36})\/refresh-report$/i);
+      if (reportAction) {
+        const destination = `/projects/${reportAction[1]}`;
+        try {
+          if (store.project(reportAction[1])?.status !== 'pr_validated') throw new Error('This report is not currently validated.');
+          await coordinator.refreshReport(reportAction[1], { force: true });
+          return redirect(response, messageUrl(destination, 'Report checked against GitHub.'));
+        } catch (error) { return redirect(response, messageUrl(destination, error.message, 'error')); }
+      }
       const stopAction = path.match(/^\/projects\/([0-9a-f-]{36})\/stop$/i);
       if (stopAction) {
         const projectId = stopAction[1];
         const destination = `/projects/${projectId}`;
         const project = store.project(projectId);
-        if (!project || !['queued', 'running'].includes(project.status)) return redirect(response, messageUrl(destination, 'This project is not queued or running.', 'error'));
-        if (project.status === 'running' && project.jules_session_name) {
+        if (!project || !['queued', 'running', 'stopping'].includes(project.status)) return redirect(response, messageUrl(destination, 'This project is not queued or running.', 'error'));
+        const claimed = store.db.prepare("UPDATE projects SET status='stopping',updated_at=? WHERE id=? AND status=?").run(dateNow(), projectId, project.status);
+        if (!claimed.changes) return redirect(response, messageUrl(destination, 'The task changed. Refresh and try again.', 'error'));
+        if (project.status !== 'queued' && project.jules_session_name) {
           try { await julesFactory(julesKey()).deleteSession(project.jules_session_name); }
-          catch (error) { if (error.status !== 404) return redirect(response, messageUrl(destination, error.message, 'error')); }
+          catch (error) {
+            if (error.status !== 404) {
+              store.db.prepare("UPDATE projects SET status=?,updated_at=? WHERE id=? AND status='stopping'").run(project.status, dateNow(), projectId);
+              return redirect(response, messageUrl(destination, error.message, 'error'));
+            }
+          }
         }
         const now = dateNow();
-        store.db.prepare("UPDATE projects SET status='stopped',jules_state='STOPPED',error='Stopped by user.',updated_at=? WHERE id=? AND status IN ('queued','running')").run(now, projectId);
+        store.db.prepare("UPDATE projects SET status='stopped',jules_state='STOPPED',error='Stopped by user.',updated_at=? WHERE id=? AND status='stopping'").run(now, projectId);
         store.log('session_stopped', `Stopped ${project.folder}; repository slot released`, projectId);
         return redirect(response, messageUrl(destination, 'Task stopped. You can now change the repository.'));
       }
@@ -279,6 +318,7 @@ export function createRequestHandler(store, services, coordinator, flowStream, c
         try {
           const jules = julesFactory(julesKey());
           const session = await jules.session(project.jules_session_name);
+          if (store.project(projectId)?.status !== 'running') throw new Error('This task is no longer running. Refresh the project.');
           if (action === 'approve-plan') {
             if (session.state !== 'AWAITING_PLAN_APPROVAL') throw new Error('Jules is no longer waiting for plan approval. Refresh the project.');
             await jules.approvePlan(project.jules_session_name);

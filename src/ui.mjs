@@ -1,6 +1,6 @@
 import { layout } from './layout.mjs';
 import { icon } from './icons.mjs';
-import { esc, attr, link, csrf, notice, statusClass, nextNumber } from './ui-helpers.mjs';
+import { esc, attr, link, csrf, notice, statusClass, nextNumber, pageNavigation } from './ui-helpers.mjs';
 
 export { layout, styleHash } from './layout.mjs';
 const repositoryHelp = error => error?.startsWith('Could not locate') || error?.includes('saved source identifier has changed') ? `<section class="panel"><h2>Reconnect the repository</h2><p>Open Jules with the account that created this API key. Find the repository in its selector, or use Add repository to connect it. Then verify the destination here.</p><div class="form-actions"><a class="button primary" href="/setup?rebind=1">Choose an available repository</a><a href="https://jules.google.com/" target="_blank" rel="noopener">Open Jules</a><a href="/setup/guide">Repository setup instructions</a></div></section>` : '';
@@ -8,7 +8,7 @@ const repositoryHelp = error => error?.startsWith('Could not locate') || error?.
 
 export { setupPage, guidePage } from './setup-ui.mjs';
 
-function projectClearControls(projects, csrfToken) {
+function projectClearControls(projects, csrfToken, counts) {
   const clearGroups = [
     { id: 'finished', label: 'finished', statuses: ['pr_validated', 'completed', 'completed_no_pr'] },
     { id: 'reserved', label: 'reserved', statuses: ['reserved'] },
@@ -16,7 +16,7 @@ function projectClearControls(projects, csrfToken) {
     { id: 'stopped', label: 'stopped', statuses: ['stopped'] }
   ];
   return `<div class="project-clear"><p>Clear local records by status. This removes their saved activity here; Jules sessions and GitHub pull requests stay available.</p><div class="project-clear-actions">${clearGroups.map(group => {
-    const count = projects.filter(project => group.statuses.includes(project.status) && (group.id !== 'reserved' || !project.jules_session_name)).length;
+    const count = counts?.[group.id] ?? projects.filter(project => group.statuses.includes(project.status) && (group.id !== 'reserved' || !project.jules_session_name)).length;
     return `<form method="post" action="/projects/clear">${csrf(csrfToken)}<input type="hidden" name="category" value="${group.id}"><button class="ghost" ${count ? '' : 'disabled'}>Clear ${group.label} (${count})</button></form>`;
   }).join('')}</div></div>`;
 }
@@ -30,11 +30,11 @@ function projectRow(project, binding, csrfToken) {
 
 }
 
-export function dashboardPage({ binding, folders, projects, csrfToken, message, error, defaults, nextProjectNumber }) {
+export function dashboardPage({ binding, folders, projects, csrfToken, message, error, defaults, nextProjectNumber, pagination, summary }) {
   const next = nextProjectNumber ?? nextNumber(folders, projects);
-  const clearControls = projectClearControls(projects, csrfToken);
+  const clearControls = projectClearControls(projects, csrfToken, summary?.clearable);
   const rows = projects.map(project => projectRow(project, binding, csrfToken)).join('');
-  return layout('Projects', `<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">Workspace</span><h1>Research projects</h1><p class="lead">Reserve a folder for each topic, review the destination, then launch Jules.</p></div><div class="repo-summary"><span class="status good">Connected repository</span><strong>${esc(binding.github_full_name)}</strong><span>${esc(binding.base_branch)} · Jules ${icon('check')} · GitHub ${icon('check')}</span></div></div>${notice(error)}${notice(message, 'success')}<div class="metrics"><div><span>Existing projects</span><strong>${folders.length}</strong></div><div><span>Next project number</span><strong>${next}</strong><a class="metric-link" href="/settings#project-number">Change number</a></div><div><span>Concurrency</span><strong>${esc(defaults.concurrency)}</strong></div></div><section class="workspace-grid"><div class="panel"><div class="panel-heading"><h2>New topics</h2><span>One topic per line</span></div><form method="post" action="/projects/reserve">${csrf(csrfToken)}<label for="topics">Research topics</label><textarea id="topics" name="topics" rows="8" required placeholder="Uncertainty Estimation&#10;Concept Drift&#10;Robust Regression"></textarea><div class="form-actions"><button class="primary">Reserve directories</button></div></form></div><div class="panel"><div class="panel-heading"><h2>Repository preview</h2>${link(`https://github.com/${binding.github_full_name}/tree/${encodeURIComponent(binding.base_branch)}`, 'Open repository ↗')}</div><div class="folder-list">${folders.length ? folders.slice(0, 12).map(item => `<span>${esc(item.name)}/</span>`).join('') : '<p>No numbered folders found on this branch.</p>'}</div><p class="help">${folders.length > 12 ? `Showing 12 of ${folders.length}. ` : ''}New folders start at ${next}.</p></div></section><section class="panel projects"><div class="panel-heading"><h2>Reserved and launched</h2><span>${projects.length} local projects</span></div>${clearControls}${rows ? `<div class="table-wrap"><table><thead><tr><th>Assigned folder</th><th>Status</th><th>Links</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No projects yet. Add topics above to begin.</div>'}</section></main>`, { configured: true });
+  return layout('Projects', `<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">Workspace</span><h1>Research projects</h1><p class="lead">Reserve a folder for each topic, review the destination, then launch Jules.</p></div><div class="repo-summary"><span class="status good">Connected repository</span><strong>${esc(binding.github_full_name)}</strong><span>${esc(binding.base_branch)} · Jules ${icon('check')} · GitHub ${icon('check')}</span></div></div>${notice(error)}${notice(message, 'success')}<div class="metrics"><div><span>Existing projects</span><strong>${folders.length}</strong></div><div><span>Next project number</span><strong>${next}</strong><a class="metric-link" href="/settings#project-number">Change number</a></div><div><span>Concurrency</span><strong>${esc(defaults.concurrency)}</strong></div></div><section class="workspace-grid"><div class="panel"><div class="panel-heading"><h2>New topics</h2><span>One topic per line</span></div><form method="post" action="/projects/reserve">${csrf(csrfToken)}<label for="topics">Research topics</label><textarea id="topics" name="topics" rows="8" required placeholder="Uncertainty Estimation&#10;Concept Drift&#10;Robust Regression"></textarea><div class="form-actions"><button class="primary">Reserve directories</button></div></form></div><div class="panel"><div class="panel-heading"><h2>Repository preview</h2>${link(`https://github.com/${binding.github_full_name}/tree/${encodeURIComponent(binding.base_branch)}`, 'Open repository ↗')}</div><div class="folder-list">${folders.length ? folders.slice(0, 12).map(item => `<span>${esc(item.name)}/</span>`).join('') : '<p>No numbered folders found on this branch.</p>'}</div><p class="help">${folders.length > 12 ? `Showing 12 of ${folders.length}. ` : ''}New folders start at ${next}.</p></div></section><section class="panel projects"><div class="panel-heading"><h2>Reserved and launched</h2><span>${pagination?.total ?? projects.length} local projects</span></div>${clearControls}${rows ? `<div class="table-wrap"><table><thead><tr><th>Assigned folder</th><th>Status</th><th>Links</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No projects yet. Add topics above to begin.</div>'}${pageNavigation(pagination, '/') }</section></main>`, { configured: true });
 }
 
 export function preflightPage({ binding, projects, csrfToken, error, valid, prompts = [] }) {

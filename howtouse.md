@@ -99,6 +99,21 @@ On a project's page, use **Approve plan and continue** or **Send reply to Jules*
 
 When Jules completes with a pull request, Research Facility checks that it targets the connected repository and base branch and that all changed files are inside the assigned folder. A failed check appears as **PR rejected**. The app does not merge pull requests.
 
+Open reports are checked again every five minutes; closed and merged reports are checked daily. The app checks at most ten reports per polling cycle, so a large library may take longer to refresh. It reuses the previous file check only when GitHub reports the same source and destination commits and changed-file count. Select **Check report now** on the project's page to check its complete file list immediately. If a report fails a later check, its completed-report link disappears from Live flow; the project's PR link remains available for inspection.
+
+Projects, Agents, and each project's activity timeline show 25 records per page. Use **Older** and **Newer** to browse history. Project totals and clearing buttons still cover the whole library. The latest question and its reply controls remain visible when you browse older activity.
+
+Disabling **Unattended research** also prevents a reply that the model is still drafting from being sent, unless Continuous orchestration is enabled. Stopping a task prevents its pending verification or activity request from starting or resuming it. A reply that has already been sent cannot be withdrawn.
+
+### Recover an interrupted launch
+
+1. Open the blocked project's page and choose **Inspect and recover launch**.
+2. The app looks for Jules sessions with the exact saved prompt, repository, and branch. If one appears, choose **Reconnect this session** to resume monitoring its existing work.
+3. If no exact match appears, open **Inspect tasks in Jules** and check whether another session is doing this task. A changed prompt or branch may prevent an exact match.
+4. Only after confirming that no existing session is doing the task, select the confirmation box and **Return to launch review**. Review the destination and launch from that screen. This step does not start a new task by itself.
+
+The app refuses to create a second task when Jules already returns a matching session, or when the assigned folder now conflicts with the repository. Recovery requires the project's original repository connection.
+
 ## 7. Manage the connection, numbering, and local records
 
 On **Connection**, use **Test connections** to verify Jules, GitHub, the repository, and branch. **Refresh repository** also updates the known numbered folders. **Change repository** starts the setup selection again; finish or stop active tasks first.
@@ -116,7 +131,7 @@ On **Projects**, **Clear finished**, **Clear reserved**, **Clear failed**, and *
 | No automatic task starts | Keep the server running. Check automatic creation, the app cap (0 means no cap), occupied Jules slots, and the error and retry time on **Orchestrator**. Scheduled mode also requires the hourly interval and no pending projects. |
 | Model provider error | Check the model key, model ID, endpoint, and provider quota. Errors retry automatically after the displayed delay. Saving corrected settings clears that delay. |
 | Jules: Invalid API key or token | Replace the Jules key under **Connection → Update Jules key**. Get it from Jules settings. This is separate from your NVIDIA key. The replacement is verified against the saved repository before use. |
-| Launch blocked or interrupted | Open the project and inspect Jules before retrying. A request may have reached Jules even if Research Facility did not receive a response. |
+| Launch blocked or interrupted | Choose **Inspect and recover launch** on the project's page. Reconnect an existing matching session, or inspect Jules and return to launch review if none exists. |
 | Jules waits for you | Open the project timeline and its Jules session. Check **Unattended research**, the three-response limit, and any uncertain-send notice; reply manually if needed. |
 | Jules finished without a PR or PR rejected | Inspect the Jules session and PR link. The dashboard explains failed repository, branch, or folder checks. |
 

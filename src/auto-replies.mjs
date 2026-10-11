@@ -4,7 +4,12 @@ import { recordPacket } from './flow.mjs';
 const autonomousReply = 'Please continue without waiting for me. Make the reasonable choice that best satisfies the original research prompt and stays inside the assigned project folder. If a source, tool, or approach is unavailable, choose a viable alternative. Document the decision and its limits in the report, complete the requested deliverables, and create the pull request.';
 const dateNow = () => new Date().toISOString();
 
-export function createAutoReplies(store, { continuous, orchestratorSettings, modelClient }) {
+export function createAutoReplies(store, { continuous, orchestratorSettings, modelClient, isClosed = () => false }) {
+  function mayReply(project) {
+    const current = store.project(project.id);
+    return !isClosed() && current?.status === 'running' && current.jules_session_name === project.jules_session_name &&
+      (store.get('autoReply') !== '0' || continuous());
+  }
   function claimReply(activityName, projectId) {
     const now = dateNow();
     return store.db.prepare("INSERT OR IGNORE INTO jules_auto_replies(activity_name,project_id,status,created_at,updated_at) VALUES (?,?,'sending',?,?)")
@@ -12,7 +17,7 @@ export function createAutoReplies(store, { continuous, orchestratorSettings, mod
   }
 
   async function autoReplyToFeedback(project, jules, activities) {
-    if (store.get('autoReply') === '0' && !continuous()) return;
+    if (!mayReply(project)) return;
     const prefix = `${project.jules_session_name}/activities/`;
     const messages = activities.filter(item => typeof item.name === 'string' && item.name.startsWith(prefix) && !item.name.slice(prefix.length).includes('/') && (item.agentMessaged?.agentMessage || item.userMessaged?.userMessage))
       .sort((a, b) => String(a.createTime ?? '').localeCompare(String(b.createTime ?? '')) || a.name.localeCompare(b.name));
@@ -20,7 +25,7 @@ export function createAutoReplies(store, { continuous, orchestratorSettings, mod
     if (!question || messages.at(-1) !== question) return;
     const count = store.db.prepare("SELECT COUNT(*) AS n FROM jules_auto_replies WHERE project_id=? AND status IN ('sending','sent') AND activity_name IN (SELECT name FROM jules_activities WHERE project_id=? AND kind='message' AND originator='agent')").get(project.id, project.id).n;
     if (count >= 3 && !continuous()) return;
-    if (store.autoReplies(project.id).some(reply => reply.activity_name === question.name)) return;
+    if (store.db.prepare('SELECT 1 FROM jules_auto_replies WHERE activity_name=?').get(question.name)) return;
     let reply = autonomousReply;
     let replyFrom = 'coordinator';
     const orchestrator = orchestratorSettings();
@@ -30,6 +35,8 @@ export function createAutoReplies(store, { continuous, orchestratorSettings, mod
         replyFrom = 'model';
       } catch (error) { store.log('orchestrator_reply_error', error.message, project.id); }
     }
+    // Drafting can take a minute; the user may stop the task or change its policy meanwhile.
+    if (!mayReply(project) || JSON.stringify(orchestratorSettings()) !== JSON.stringify(orchestrator)) return;
     if (!claimReply(question.name, project.id)) return;
     try {
       recordPacket(store, { projectId: project.id, from: replyFrom, to: 'jules', kind: 'reply', title: 'Sending an automatic reply', content: reply });
@@ -46,7 +53,7 @@ export function createAutoReplies(store, { continuous, orchestratorSettings, mod
   }
 
   async function autoApprovePlan(project, jules, activities) {
-    if (store.get('autoReply') === '0' && !continuous()) return;
+    if (!mayReply(project)) return;
     const prefix = `${project.jules_session_name}/activities/`;
     const plan = activities.filter(item => typeof item.name === 'string' && item.name.startsWith(prefix) && item.planGenerated?.plan)
       .sort((a, b) => String(a.createTime ?? '').localeCompare(String(b.createTime ?? '')) || a.name.localeCompare(b.name)).at(-1);

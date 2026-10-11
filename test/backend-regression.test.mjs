@@ -61,10 +61,10 @@ test('numbering migration preserves all previously stored optional project field
     legacyOpen = false;
     store = openStore(directory);
     store.setSecret('jules', 'test-local-key');
-    assert.deepEqual({ ...store.project('legacy-id') }, { ...previous, number_generation: 0 });
+    assert.deepEqual({ ...store.project('legacy-id') }, { ...previous, number_generation: 0, pr_checked_at: null, pr_head_sha: null, pr_base_sha: null, pr_file_count: null });
     store.db.close();
     store = openStore(directory);
-    assert.deepEqual({ ...store.project('legacy-id') }, { ...previous, number_generation: 0 });
+    assert.deepEqual({ ...store.project('legacy-id') }, { ...previous, number_generation: 0, pr_checked_at: null, pr_head_sha: null, pr_base_sha: null, pr_file_count: null });
     assert.equal(store.getSecret('jules'), 'test-local-key');
   } finally {
     if (legacyOpen) legacy.close();

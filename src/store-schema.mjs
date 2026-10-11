@@ -13,6 +13,10 @@ const projectColumns = {
   jules_session_url: 'TEXT',
   pr_url: 'TEXT',
   pr_status: 'TEXT',
+  pr_checked_at: 'TEXT',
+  pr_head_sha: 'TEXT',
+  pr_base_sha: 'TEXT',
+  pr_file_count: 'INTEGER',
   error: 'TEXT',
   created_at: 'TEXT NOT NULL',
   updated_at: 'TEXT NOT NULL',
@@ -76,7 +80,7 @@ export function initializeStoreSchema(db) {
   `);
 
   const existing = new Set(db.prepare('PRAGMA table_info(projects)').all().map(column => column.name));
-  const additions = ['binding_identity', 'repository_full_name', 'base_branch', 'pr_status', 'prompt_text', 'jules_state', 'jules_polled_at', 'activity_error', 'orchestrator_instructions'].filter(name => !existing.has(name));
+  const additions = ['binding_identity', 'repository_full_name', 'base_branch', 'pr_status', 'pr_checked_at', 'pr_head_sha', 'pr_base_sha', 'pr_file_count', 'prompt_text', 'jules_state', 'jules_polled_at', 'activity_error', 'orchestrator_instructions'].filter(name => !existing.has(name));
   if (!additions.length && existing.has('number_generation')) return;
   transaction(db, () => {
     for (const name of additions) {

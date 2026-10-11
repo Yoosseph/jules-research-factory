@@ -115,11 +115,17 @@ export function parsePullRequestUrl(url, binding) {
   return Number(match[3]);
 }
 
-export async function validatePullRequest(url, project, binding, github) {
+export async function validatePullRequest(url, project, binding, github, { useCache = false } = {}) {
   const number = parsePullRequestUrl(url, binding);
   const pull = await github.pull(binding.github_owner, binding.github_repo, number);
   if (String(pull.base?.repo?.id) !== String(binding.github_repository_id) || pull.base?.ref !== binding.base_branch) {
     throw new BindingError('The pull request targets a different repository or base branch.');
+  }
+  const headSha = pull.head?.sha || null, baseSha = pull.base?.sha || null;
+  const status = pull.merged_at ? 'merged' : pull.state === 'closed' ? 'closed' : 'open';
+  if (useCache && headSha && baseSha && project.pr_head_sha === headSha && project.pr_base_sha === baseSha &&
+      project.pr_file_count > 0 && project.pr_file_count === pull.changed_files) {
+    return { number, files: project.pr_file_count, status, headSha, baseSha };
   }
   const files = await github.pullFiles(binding.github_owner, binding.github_repo, number);
   // GitHub caps this endpoint at 3,000 files. Never certify a partial file list.
@@ -129,5 +135,13 @@ export async function validatePullRequest(url, project, binding, github) {
   if (!files.length || files.some(file => !file.filename?.startsWith(`${project.folder}/`) || file.previous_filename && !file.previous_filename.startsWith(`${project.folder}/`))) {
     throw new BindingError(`Pull request changes files outside ${project.folder}/.`);
   }
-  return { number, files: files.length, status: pull.merged_at ? 'merged' : pull.state === 'closed' ? 'closed' : 'open' };
+  // File pages are mutable. Cache their validation only if both commits stayed fixed.
+  if (headSha && baseSha) {
+    const latest = await github.pull(binding.github_owner, binding.github_repo, number);
+    if (latest.head?.sha !== headSha || latest.base?.sha !== baseSha || latest.changed_files !== pull.changed_files ||
+        String(latest.base?.repo?.id) !== String(binding.github_repository_id) || latest.base?.ref !== binding.base_branch) {
+      throw new BindingError('The pull request changed during validation. Review it in GitHub.');
+    }
+  }
+  return { number, files: files.length, status, headSha, baseSha };
 }

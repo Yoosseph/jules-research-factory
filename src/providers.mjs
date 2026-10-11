@@ -12,6 +12,13 @@ export class ProviderError extends Error {
   }
 }
 
+export function retryAfterMs(response, now = Date.now()) {
+  const value = response.headers?.get('retry-after')?.trim();
+  if (!value) return 0;
+  const delay = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - now;
+  return Number.isFinite(delay) ? Math.max(0, delay) : 0;
+}
+
 async function request(provider, url, headers, options = {}) {
   let response;
   try {
@@ -22,9 +29,7 @@ async function request(provider, url, headers, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const explanation = response.status === 401 ? 'Invalid API key or token' : response.status === 403 ? 'Access denied or rate limited' : body.error?.message ?? body.message ?? response.statusText;
-    const retryAfter = response.headers?.get('retry-after');
-    const retryAfterMs = retryAfter ? Math.max(0, /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now()) : 0;
-    throw new ProviderError(provider, response.status, `${provider}: ${explanation}`, { retryAfterMs, code: body.error?.status ?? '' });
+    throw new ProviderError(provider, response.status, `${provider}: ${explanation}`, { retryAfterMs: retryAfterMs(response), code: body.error?.status ?? '' });
   }
   return body;
 }

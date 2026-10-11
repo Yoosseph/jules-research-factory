@@ -4,6 +4,13 @@ Notable project changes are recorded here. Tagged releases will follow [Semantic
 
 ## Unreleased
 
+- Fixed stopped tasks launching after pending verification, duplicate concurrent launches, and late activity polls overwriting stopped tasks.
+- Prevented pending automatic replies after disabling replies, stopping a task, changing its research policy, or shutting down.
+- Reduced report polling with persisted five-minute/daily checks, bounded batches, commit-aware file checks, and a manual check button.
+- Honored model provider retry instructions, including errors with non-JSON response bodies, and removed completed-report links after failed revalidation.
+- Added interrupted-launch recovery to reconnect an existing matching Jules session or return an inspected retry to launch review.
+- Paged project and activity history while retaining global totals and current reply controls, and bounded live-flow project reads.
+
 - Reorganized the app into focused browser-request, research-coordination, live-message, page-rendering, and saved-data modules; removed repeated helpers and unused styles while preserving existing workflows.
 - Preserved saved research instructions when upgrading older databases, and added checks for migration recovery, provider paging, local access, and form protection.
 
