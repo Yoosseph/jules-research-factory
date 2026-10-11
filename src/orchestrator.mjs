@@ -1,4 +1,4 @@
-import { ProviderError } from './providers.mjs';
+import { ProviderError, retryAfterMs } from './providers.mjs';
 
 export const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
 export const NVIDIA_MODEL = 'nvidia/nemotron-3-super-120b-a12b';
@@ -38,8 +38,9 @@ export function orchestratorClient({ endpoint, model, apiKey }, fetcher = fetch)
       });
     } catch (error) { throw new ProviderError('Model', 503, `Model provider is unavailable: ${error.message}`); }
     let data;
-    try { data = await response.json(); } catch { throw new Error('Model provider returned invalid JSON.'); }
-    if (!response.ok) throw new ProviderError('Model', response.status, `Model provider: ${response.status === 401 ? 'Invalid API key' : response.status === 410 ? `Model ${model} is no longer available at this endpoint. Select a supported Model ID under Model connection.` : data?.error?.message || response.statusText}`);
+    try { data = await response.json(); }
+    catch { if (response.ok) throw new Error('Model provider returned invalid JSON.'); data = {}; }
+    if (!response.ok) throw new ProviderError('Model', response.status, `Model provider: ${response.status === 401 ? 'Invalid API key' : response.status === 410 ? `Model ${model} is no longer available at this endpoint. Select a supported Model ID under Model connection.` : data?.error?.message || response.statusText}`, { retryAfterMs: retryAfterMs(response), code: data?.error?.status ?? '' });
     return parseJsonMessage(data.choices?.[0]?.message?.content);
   };
 }

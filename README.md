@@ -111,9 +111,12 @@ For an account with 15 simultaneous tasks, set **Agents → Agent settings → C
 - **Live flow:** watch glowing dots carry messages across the communication map. Select a dot or message card to open a compact panel showing its contents, sender, recipient, and message type. Choose **Expand message** for a larger reader. Completed-report packets link to the report in GitHub. Use **Replay recent** to follow recorded exchanges again, or pause the view without stopping research.
 - **Agents:** see the state of each task and open its activity timeline.
 - **Projects:** find assignments and their proposed reports on GitHub.
+- **History and recovery:** browse older projects and activity with page controls. For an interrupted launch, open the blocked task and choose **Inspect and recover launch** to reconnect existing work or review a retry after inspecting Jules.
 - **Prompt:** change the instructions used for future reports.
 
 A **pull request**, or PR, is a proposed change to your GitHub repository. Open it to read the report and review its sources. The app checks that the PR targets the connected repository and stays inside its assigned folder; you decide whether to accept it.
+
+Open reports are rechecked every five minutes, and closed or merged reports daily, in batches of up to ten. Choose **Check report now** on a project's page for an immediate check.
 
 Click the orbital mark beside the app's name to switch between light and dark mode.
 

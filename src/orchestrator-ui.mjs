@@ -1,8 +1,7 @@
-import { layout, esc } from './ui.mjs';
+import { layout } from './layout.mjs';
+import { esc, csrf, notice, date } from './ui-helpers.mjs';
 import { icon } from './icons.mjs';
 import { NVIDIA_MODEL } from './orchestrator.mjs';
-
-const date = value => new Date(value).toLocaleString('en-GB');
 
 export function orchestratorPage({ settings, hasKey, csrfToken, message, error, lastError, lastAttempt, retryAt, usedToday, concurrency }) {
   const provider = settings.provider ?? 'nvidia';
@@ -12,13 +11,13 @@ export function orchestratorPage({ settings, hasKey, csrfToken, message, error, 
   const section = (number, title) => `<div class="section-label"><span>${number} /</span><h2>${title}</h2></div>`;
   return layout('Research orchestrator', `<main class="orchestrator-page">
     <div class="page-heading"><div><h1>Research orchestrator</h1><p class="lead">Your model plans research tasks. Jules runs them and submits reports to your repository.</p></div><a class="text-link" href="/activity">View agents ${icon('arrow-up-right')}</a></div>
-    ${error ? `<div class="notice" role="alert">${esc(error)}</div>` : ''}
-    ${message ? `<div class="notice success" role="status">${esc(message)}</div>` : ''}
+    ${notice(error, 'action', 'alert')}
+    ${notice(message, 'success')}
     ${lastError ? `<div class="notice" role="alert"><strong>Research is waiting.</strong> ${esc(lastError)}${retryAt ? ` Automatic retry: ${esc(date(retryAt))}.` : ''}${lastError.startsWith('Jules:') && /key|token/i.test(lastError) ? ' Update your Jules key under Connection: Update Jules key. The NVIDIA key is separate. <a href="/settings#jules-key">Update Jules key</a>' : ''}</div>` : ''}
     <div class="metrics orchestrator-metrics"><div><span>Research status</span><strong>${esc(status)}</strong></div><div><span>Tasks launched today (UTC)</span><strong>${esc(usedToday)} / ${limit === 0 ? 'No app cap' : esc(limit)}</strong></div><div><span>Jules slots target</span><strong>${esc(concurrency)}</strong></div><div><span>Last attempt</span><strong>${esc(lastAttempt ? date(lastAttempt) : 'Not yet')}</strong></div></div>
     <div class="orchestrator-layout">
       <form id="orchestrator-settings" method="post" action="/orchestrator/settings" class="form-card orchestrator-form">
-        <input type="hidden" name="csrf" value="${esc(csrfToken)}">
+        ${csrf(csrfToken)}
         <section class="config-section" aria-label="Research direction">
           ${section('01', 'Research brief')}
           <p class="help">Describe the subjects, priorities, and sources for new research tasks.</p>
@@ -44,7 +43,7 @@ export function orchestratorPage({ settings, hasKey, csrfToken, message, error, 
         <div class="run-card"><h2>Automatic research</h2><p>Enable automatic creation to launch new tasks as slots become available.</p><button class="primary" form="orchestrator-settings">Save &amp; apply ${icon('arrow-up-right')}</button><label class="check-option"><input name="enabled" form="orchestrator-settings" type="checkbox" value="1" ${settings.enabled ? 'checked' : ''}><span>Automatically create and launch research</span></label></div>
         <ul class="run-details"><li>${icon('workflow')}<span>Available slots are checked every 30 seconds.</span></li><li>${icon('shield-check')}<span>Research stays within its assigned repository folder.</span></li><li>${icon('book-open')}<span>Reports are submitted as pull requests.</span></li></ul>
         <p class="help">Keep this app and computer running. Quota or provider errors pause launches and retry automatically. Turning off automatic creation stops new proposals; existing work can finish.</p>
-        ${hasKey && settings.brief ? `<form method="post" action="/orchestrator/generate" class="form-actions"><input type="hidden" name="csrf" value="${esc(csrfToken)}"><button class="ghost">Create one research task now ${icon('arrow-right')}</button></form>` : ''}
+        ${hasKey && settings.brief ? `<form method="post" action="/orchestrator/generate" class="form-actions">${csrf(csrfToken)}<button class="ghost">Create one research task now ${icon('arrow-right')}</button></form>` : ''}
       </aside>
     </div>
   </main>`, { configured: true });
