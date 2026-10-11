@@ -176,6 +176,24 @@ test('model errors retain retry timing even when the error response is not JSON'
   assert.equal(retryAfterMs({ headers: new Headers({ 'retry-after': 'invalid' }) }, now), 0);
 });
 
+test('model reply rate limits persist a cooldown and subsequent questions use the standing policy', async () => {
+  const f = await reliabilityFixture();
+  try {
+    const [p] = f.store.reserve(['Reply cooldown']);
+    f.store.db.prepare("UPDATE projects SET status='running',jules_session_name='sessions/replies' WHERE id=?").run(p.id);
+    f.sessions.set('sessions/replies', { name: 'sessions/replies', state: 'AWAITING_USER_FEEDBACK' });
+    f.store.setSecret('orchestrator', 'fake-model'); f.store.set('orchestrator', JSON.stringify({ brief: 'Public sources', enabled: false }));
+    let calls = 0, questions = 0;
+    f.setModel(async () => { calls++; throw new ProviderError('Model', 429, 'Wait two hours', { retryAfterMs: 7200000 }); });
+    f.jules.activities = async () => [{ name: `sessions/replies/activities/question-${++questions}`, originator: 'agent', agentMessaged: { agentMessage: 'Which public source?' } }];
+    await f.coordinator.pollSessions();
+    assert.ok(Date.parse(f.store.get('orchestratorRetryAt')) - Date.now() > 7199000);
+    await f.coordinator.pollSessions();
+    assert.equal(calls, 1); assert.equal(f.sent.length, 2);
+    assert.ok(f.sent.every(message => message.reply.includes('Please continue without waiting')));
+  } finally { await f.cleanup(); }
+});
+
 test('recovery reconnects the original session and refuses mismatched or duplicate retries', async () => {
   const f = await reliabilityFixture();
   try {

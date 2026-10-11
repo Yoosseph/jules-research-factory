@@ -4,7 +4,7 @@ import { recordPacket } from './flow.mjs';
 const autonomousReply = 'Please continue without waiting for me. Make the reasonable choice that best satisfies the original research prompt and stays inside the assigned project folder. If a source, tool, or approach is unavailable, choose a viable alternative. Document the decision and its limits in the report, complete the requested deliverables, and create the pull request.';
 const dateNow = () => new Date().toISOString();
 
-export function createAutoReplies(store, { continuous, orchestratorSettings, modelClient, isClosed = () => false }) {
+export function createAutoReplies(store, { continuous, orchestratorSettings, modelClient, isClosed = () => false, modelCoolingDown = () => false, onModelError = () => {} }) {
   function mayReply(project) {
     const current = store.project(project.id);
     return !isClosed() && current?.status === 'running' && current.jules_session_name === project.jules_session_name &&
@@ -29,11 +29,11 @@ export function createAutoReplies(store, { continuous, orchestratorSettings, mod
     let reply = autonomousReply;
     let replyFrom = 'coordinator';
     const orchestrator = orchestratorSettings();
-    if (orchestrator.brief && store.getSecret('orchestrator')) {
+    if (orchestrator.brief && store.getSecret('orchestrator') && !modelCoolingDown()) {
       try {
         reply = await draftJulesReply(modelClient(project.id), { brief: orchestrator.brief, topic: project.topic, instructions: project.orchestrator_instructions, question: question.agentMessaged.agentMessage });
         replyFrom = 'model';
-      } catch (error) { store.log('orchestrator_reply_error', error.message, project.id); }
+      } catch (error) { onModelError(error); store.log('orchestrator_reply_error', error.message, project.id); }
     }
     // Drafting can take a minute; the user may stop the task or change its policy meanwhile.
     if (!mayReply(project) || JSON.stringify(orchestratorSettings()) !== JSON.stringify(orchestrator)) return;

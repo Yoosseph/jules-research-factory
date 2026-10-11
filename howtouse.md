@@ -97,6 +97,8 @@ Under **Agents → Agent settings**, change the concurrency limit (1–60), pref
 
 On a project's page, use **Approve plan and continue** or **Send reply to Jules** when manual input is needed. Use **Stop task** to stop a queued or running task; for a running task, the app asks Jules to delete its session. Open the Jules link for its complete live interface.
 
+If the model provider requests a retry delay while drafting feedback, the app saves that delay and avoids further model requests until it expires. Routine questions use the standing instruction to continue within the assigned folder during that wait.
+
 When Jules completes with a pull request, Research Facility checks that it targets the connected repository and base branch and that all changed files are inside the assigned folder. A failed check appears as **PR rejected**. The app does not merge pull requests.
 
 Open reports are checked again every five minutes; closed and merged reports are checked daily. The app checks at most ten reports per polling cycle, so a large library may take longer to refresh. It reuses the previous file check only when GitHub reports the same source and destination commits and changed-file count. Select **Check report now** on the project's page to check its complete file list immediately. If a report fails a later check, its completed-report link disappears from Live flow; the project's PR link remains available for inspection.

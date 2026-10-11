@@ -49,7 +49,8 @@ export function createResearchCoordinator(store, services) {
     const settings = orchestratorSettings();
     return settings.enabled && settings.mode === 'continuous';
   };
-  const { autoReplyToFeedback, autoApprovePlan } = createAutoReplies(store, { continuous, orchestratorSettings, modelClient, isClosed: () => closed });
+  const { autoReplyToFeedback, autoApprovePlan } = createAutoReplies(store, { continuous, orchestratorSettings, modelClient, isClosed: () => closed,
+    modelCoolingDown: coolingDown, onModelError: error => { if (!closed) deferResearch(error); } });
 
   function resetCooldown() {
     store.set('orchestratorRetryAt', '');

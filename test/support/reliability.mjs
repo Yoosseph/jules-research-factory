@@ -37,11 +37,12 @@ export async function reliabilityFixture() {
     branch: async () => ({ commit: { sha: 'commit' } }), commit: async () => ({ tree: { sha: 'tree' } }),
     tree: async () => ({ tree: [] }), pulls: async () => []
   };
+  let model = async () => { throw new Error('No real model calls in tests'); };
   const services = {
     julesKey: () => store.getSecret('jules'), githubToken: () => store.getSecret('github'),
     deps: () => ({ jules, github }), orchestratorSettings: () => JSON.parse(store.get('orchestrator') ?? '{}'),
     julesFactory: () => jules, githubFactory: () => github,
-    orchestratorFactory: () => { throw new Error('No real model calls in tests'); },
+    orchestratorFactory: () => model,
     promptPath: writePromptFixture(directory)
   };
   const coordinator = createResearchCoordinator(store, services);
@@ -54,6 +55,6 @@ export async function reliabilityFixture() {
     await handler(req, { writeHead(status, headers) { Object.assign(result, { status, headers }); }, end(body) { result.body = body; } });
     return result;
   };
-  return { store, jules, github, services, coordinator, sessions, sent, request,
+  return { store, jules, github, services, coordinator, sessions, sent, request, setModel: client => { model = client; },
     async cleanup() { coordinator.close(); await coordinator.schedule(); fixture.cleanup(); } };
 }
